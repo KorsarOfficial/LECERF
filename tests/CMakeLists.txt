@@ -9,3 +9,7 @@ add_test(NAME executor COMMAND test_executor)
 add_executable(test_bus test_bus.c)
 target_link_libraries(test_bus PRIVATE cortex_m_core)
 add_test(NAME bus COMMAND test_bus)
+
+add_executable(test_memory test_memory.c)
+target_link_libraries(test_memory PRIVATE cortex_m_core)
+add_test(NAME memory COMMAND test_memory)
