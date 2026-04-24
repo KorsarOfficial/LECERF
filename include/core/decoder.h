@@ -37,6 +37,7 @@ typedef enum {
     OP_SVC, OP_UDF,
     OP_NOP, OP_YIELD, OP_WFE, OP_WFI, OP_SEV,
     OP_IT,
+    OP_CBZ, OP_CBNZ,
 
     /* Thumb-2 32-bit encodings (ARMv7-M, ARM ARM A5.3) */
     OP_T32_BL,
@@ -85,6 +86,15 @@ typedef enum {
     OP_T32_UMULL,  OP_T32_SMULL,
     OP_T32_UMLAL,  OP_T32_SMLAL,
     OP_T32_UDIV,   OP_T32_SDIV,
+
+    /* Bitfield and saturating ops */
+    OP_T32_BFI,    OP_T32_BFC,
+    OP_T32_UBFX,   OP_T32_SBFX,
+    OP_T32_CLZ,    OP_T32_RBIT,
+    OP_T32_USAT,   OP_T32_SSAT,
+
+    /* T32 register shift (Rd ← shift(Rn, Rm)). Separate from Thumb-1 LSL/etc. */
+    OP_T32_LSL_R, OP_T32_LSR_R, OP_T32_ASR_R, OP_T32_ROR_R,
 
     /* Table-branch byte/halfword */
     OP_T32_TBB,    OP_T32_TBH,

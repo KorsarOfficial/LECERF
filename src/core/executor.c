@@ -313,6 +313,15 @@ bool execute(cpu_t* c, bus_t* bus, const insn_t* i) {
             break;
         }
 
+        case OP_CBZ: {
+            if (c->r[i->rn] == 0) next_pc = c->r[REG_PC] + 4 + i->imm;
+            break;
+        }
+        case OP_CBNZ: {
+            if (c->r[i->rn] != 0) next_pc = c->r[REG_PC] + 4 + i->imm;
+            break;
+        }
+
         case OP_UDF:
             c->halted = true;
             return false;
@@ -586,6 +595,22 @@ bool execute(cpu_t* c, bus_t* bus, const insn_t* i) {
         case OP_BKPT:
             c->halted = true;
             return true;
+
+        case OP_CPS: {
+            u32 im = (i->imm >> 2) & 1;
+            u32 I_bit = (i->imm >> 1) & 1;
+            u32 F_bit = i->imm & 1;
+            if (im) {
+                /* disable */
+                if (I_bit) c->primask = 1;
+                if (F_bit) c->faultmask = 1;
+            } else {
+                /* enable */
+                if (I_bit) c->primask = 0;
+                if (F_bit) c->faultmask = 0;
+            }
+            break;
+        }
 
         /* === Thumb-2 branch with link === */
         case OP_T32_BL: {
@@ -1082,6 +1107,92 @@ bool execute(cpu_t* c, bus_t* bus, const insn_t* i) {
                 }
                 default: break;
             }
+            break;
+        }
+
+        /* === T32 shift register (Rd = shift(Rn, Rm)) === */
+        case OP_T32_LSL_R: {
+            u32 sh = c->r[i->rm] & 0xFF;
+            u32 r = sh >= 32 ? 0 : (c->r[i->rn] << sh);
+            c->r[i->rd] = r;
+            if (i->set_flags) cpu_set_flags_nz(c, r);
+            break;
+        }
+        case OP_T32_LSR_R: {
+            u32 sh = c->r[i->rm] & 0xFF;
+            u32 r = sh >= 32 ? 0 : (c->r[i->rn] >> sh);
+            c->r[i->rd] = r;
+            if (i->set_flags) cpu_set_flags_nz(c, r);
+            break;
+        }
+        case OP_T32_ASR_R: {
+            u32 sh = c->r[i->rm] & 0xFF;
+            i32 v = (i32)c->r[i->rn];
+            i32 r = sh >= 32 ? (v >> 31) : (v >> sh);
+            c->r[i->rd] = (u32)r;
+            if (i->set_flags) cpu_set_flags_nz(c, (u32)r);
+            break;
+        }
+        case OP_T32_ROR_R: {
+            u32 sh = c->r[i->rm] & 0x1F;
+            u32 v = c->r[i->rn];
+            u32 r = sh ? ((v >> sh) | (v << (32 - sh))) : v;
+            c->r[i->rd] = r;
+            if (i->set_flags) cpu_set_flags_nz(c, r);
+            break;
+        }
+
+        /* === Bitfield ops === */
+        case OP_T32_BFI: {
+            u32 lsb = i->imm & 0x1F;
+            u32 msb = (i->imm >> 8) & 0x1F;
+            u32 width = msb - lsb + 1;
+            u32 mask = width >= 32 ? 0xFFFFFFFFu : ((1u << width) - 1u);
+            u32 src = c->r[i->rn] & mask;
+            c->r[i->rd] = (c->r[i->rd] & ~(mask << lsb)) | (src << lsb);
+            break;
+        }
+        case OP_T32_BFC: {
+            u32 lsb = i->imm & 0x1F;
+            u32 msb = (i->imm >> 8) & 0x1F;
+            u32 width = msb - lsb + 1;
+            u32 mask = width >= 32 ? 0xFFFFFFFFu : ((1u << width) - 1u);
+            c->r[i->rd] = c->r[i->rd] & ~(mask << lsb);
+            break;
+        }
+        case OP_T32_UBFX: {
+            u32 lsb = i->imm & 0x1F;
+            u32 widthm1 = (i->imm >> 8) & 0x1F;
+            u32 width = widthm1 + 1;
+            u32 mask = width >= 32 ? 0xFFFFFFFFu : ((1u << width) - 1u);
+            c->r[i->rd] = (c->r[i->rn] >> lsb) & mask;
+            break;
+        }
+        case OP_T32_SBFX: {
+            u32 lsb = i->imm & 0x1F;
+            u32 widthm1 = (i->imm >> 8) & 0x1F;
+            u32 width = widthm1 + 1;
+            u32 val = (c->r[i->rn] >> lsb) & (width >= 32 ? 0xFFFFFFFFu : ((1u << width) - 1u));
+            u32 sign = 1u << (width - 1);
+            c->r[i->rd] = (val ^ sign) - sign; /* sign-extend */
+            break;
+        }
+        case OP_T32_CLZ: {
+            u32 v = c->r[i->rm];
+            if (v == 0) { c->r[i->rd] = 32; break; }
+            u32 n = 0;
+            while ((v & 0x80000000u) == 0) { n++; v <<= 1; }
+            c->r[i->rd] = n;
+            break;
+        }
+        case OP_T32_RBIT: {
+            u32 v = c->r[i->rm];
+            v = ((v & 0xAAAAAAAAu) >> 1) | ((v & 0x55555555u) << 1);
+            v = ((v & 0xCCCCCCCCu) >> 2) | ((v & 0x33333333u) << 2);
+            v = ((v & 0xF0F0F0F0u) >> 4) | ((v & 0x0F0F0F0Fu) << 4);
+            v = ((v & 0xFF00FF00u) >> 8) | ((v & 0x00FF00FFu) << 8);
+            v = (v >> 16) | (v << 16);
+            c->r[i->rd] = v;
             break;
         }
 

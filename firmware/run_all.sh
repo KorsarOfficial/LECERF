@@ -44,6 +44,26 @@ run_test test5 "R0=00000003 R1=20000200 R2=20000200"
 # test6: mini-RTOS — 2 tasks, SysTick+PendSV preemptive round-robin scheduler
 run_test test6 "PC=000000aa"
 
+# test7: real FreeRTOS-Kernel V10.6.2 — 2 tasks with vTaskDelay
+run_test_freertos() {
+    local name="$1"; shift
+    local expect="$1"; shift
+    cd "$name"
+    bash build.sh > build.log 2>&1
+    cd ..
+    local out
+    out=$("$EMU" "$name/$name.bin" 5000000 2>&1)
+    if echo "$out" | grep -q "$expect"; then
+        echo "PASS $name  ($(echo "$out" | head -1 | tr -d '\r' | cut -c1-50))"
+        PASS=$((PASS+1))
+    else
+        echo "FAIL $name"
+        echo "$out" | tail -5 | sed 's/^/    /'
+        FAIL=$((FAIL+1))
+    fi
+}
+run_test_freertos test7_freertos "R0=00000014 R1=00000014"
+
 echo ""
 echo "===== $PASS passed, $FAIL failed ====="
 [ $FAIL -eq 0 ]

@@ -200,6 +200,17 @@ static u8 decode_thumb16(u16 w, addr_t pc, insn_t* out) {
             out->reg_list = (w & 0xFF) | (((w >> 8) & 1) << 15); /* PC bit */
             return 2;
         }
+        /* CBZ/CBNZ — A7.7.21 / A7.7.22.
+           1011 op 0 i 1 imm5(5) Rn(3). Fixed bit[10]=0, bit[8]=1. */
+        if ((w & 0xF500u) == 0xB100u) {
+            u32 op = (w >> 11) & 1;
+            u32 i_bit = (w >> 9) & 1;
+            u32 imm5 = (w >> 3) & 0x1F;
+            out->rn = (u8)(w & 0x7);
+            out->imm = (i_bit << 6) | (imm5 << 1);
+            out->op = op ? OP_CBNZ : OP_CBZ;
+            return 2;
+        }
         /* IT: 1011 1111 cond mask, mask != 0000.  ARM ARM A7.7.38 */
         if ((w & 0xFF00u) == 0xBF00u && (w & 0x000F) != 0) {
             out->op = OP_T32_IT;
@@ -241,6 +252,16 @@ static u8 decode_thumb16(u16 w, addr_t pc, insn_t* out) {
         if ((w & 0xFF00u) == 0xBE00u) {
             out->op = OP_BKPT;
             out->imm = w & 0xFF;
+            return 2;
+        }
+        /* CPS (T1): 10110110 011 im 0 A I F. ARM ARM A7.7.33.
+           im=0 IE (enable), im=1 ID (disable). A/I/F select masks. */
+        if ((w & 0xFFE0u) == 0xB660u) {
+            u32 im = (w >> 4) & 1;
+            u32 I_bit = (w >> 1) & 1;
+            u32 F_bit = w & 1;
+            out->op  = OP_CPS;
+            out->imm = (im << 2) | (I_bit << 1) | F_bit;
             return 2;
         }
     }
@@ -591,6 +612,24 @@ static u8 decode_thumb32(u16 w0, u16 w1, addr_t pc, insn_t* out) {
         return 4;
     }
 
+    /* === T32 shift register (LSL/LSR/ASR/ROR) — A5.3.12 ===
+       w0 = 1111 1010 0 typ(2) S Rn, w1 = 1111 Rd 0000 Rm
+       bit[7:5] = 0,typ[1],typ[0]; bit[4] = S; but decode table uses bits[24:21] = 0,0,0,typ. */
+    if ((w0 & 0xFFA0u) == 0xFA00u && (w1 & 0xF0F0u) == 0xF000u) {
+        u32 typ = (w0 >> 5) & 0x3;
+        out->rn = (u8)(w0 & 0xF);        /* value to shift */
+        out->rd = (u8)((w1 >> 8) & 0xF);
+        out->rm = (u8)(w1 & 0xF);        /* shift amount */
+        out->set_flags = (w0 >> 4) & 1;
+        switch (typ) {
+            case 0: out->op = OP_T32_LSL_R; break;
+            case 1: out->op = OP_T32_LSR_R; break;
+            case 2: out->op = OP_T32_ASR_R; break;
+            case 3: out->op = OP_T32_ROR_R; break;
+        }
+        return 4;
+    }
+
     /* === 32-bit multiply / multiply-accumulate / divide — A5.3.17 / A5.3.18 ===
        Multiply (4-op): w0[15:4] = 1111 1011 0xxx, w1[15:4] = 1111 op4 Rd
        Long multiply:  w0[15:4] = 1111 1011 1xxx */
@@ -657,6 +696,66 @@ static u8 decode_thumb32(u16 w0, u16 w1, addr_t pc, insn_t* out) {
         out->rn = (u8)(w0 & 0xF);
         out->rm = (u8)(w1 & 0xF);
         out->op = (w1 & 0x10) ? OP_T32_TBH : OP_T32_TBB;
+        return 4;
+    }
+
+    /* === Bitfield operations (T32 plain-imm with specific op) — A5.3.3 ===
+       BFI  T1: w0 = 11110_0_11_0110_Rn, w1 = 0_imm3_Rd_imm2_0_msb
+       BFC  T1: same as BFI with Rn=1111
+       UBFX T1: w0 = 11110_0_11_1100_Rn, w1 = 0_imm3_Rd_imm2_0_widthm1
+       SBFX T1: w0 = 11110_0_11_0100_Rn */
+    if ((w0 & 0xFBF0u) == 0xF360u) {
+        /* BFI / BFC */
+        u32 Rn = w0 & 0xF;
+        u32 imm3 = (w1 >> 12) & 0x7;
+        u32 Rd   = (w1 >> 8) & 0xF;
+        u32 imm2 = (w1 >> 6) & 0x3;
+        u32 msb  = w1 & 0x1F;
+        u32 lsb  = (imm3 << 2) | imm2;
+        out->rn = (u8)Rn; out->rd = (u8)Rd;
+        out->imm = (msb << 8) | lsb;
+        out->op = (Rn == 15) ? OP_T32_BFC : OP_T32_BFI;
+        return 4;
+    }
+    if ((w0 & 0xFBF0u) == 0xF3C0u) {
+        /* UBFX */
+        u32 Rn = w0 & 0xF;
+        u32 imm3 = (w1 >> 12) & 0x7;
+        u32 Rd   = (w1 >> 8) & 0xF;
+        u32 imm2 = (w1 >> 6) & 0x3;
+        u32 widthm1 = w1 & 0x1F;
+        u32 lsb  = (imm3 << 2) | imm2;
+        out->rn = (u8)Rn; out->rd = (u8)Rd;
+        out->imm = (widthm1 << 8) | lsb;
+        out->op = OP_T32_UBFX;
+        return 4;
+    }
+    if ((w0 & 0xFBF0u) == 0xF340u) {
+        /* SBFX */
+        u32 Rn = w0 & 0xF;
+        u32 imm3 = (w1 >> 12) & 0x7;
+        u32 Rd   = (w1 >> 8) & 0xF;
+        u32 imm2 = (w1 >> 6) & 0x3;
+        u32 widthm1 = w1 & 0x1F;
+        u32 lsb  = (imm3 << 2) | imm2;
+        out->rn = (u8)Rn; out->rd = (u8)Rd;
+        out->imm = (widthm1 << 8) | lsb;
+        out->op = OP_T32_SBFX;
+        return 4;
+    }
+
+    /* === CLZ / RBIT — A5.3.13, A5.3.14 ===
+       w0 = 1111 1010 1x11 Rm, w1 = 1111 Rd 10xy Rm (duplicate Rm) */
+    if ((w0 & 0xFFF0u) == 0xFAB0u && (w1 & 0xF0F0u) == 0xF080u) {
+        out->rm = (u8)(w0 & 0xF);
+        out->rd = (u8)((w1 >> 8) & 0xF);
+        out->op = OP_T32_CLZ;
+        return 4;
+    }
+    if ((w0 & 0xFFF0u) == 0xFA90u && (w1 & 0xF0F0u) == 0xF0A0u) {
+        out->rm = (u8)(w0 & 0xF);
+        out->rd = (u8)((w1 >> 8) & 0xF);
+        out->op = OP_T32_RBIT;
         return 4;
     }
 
