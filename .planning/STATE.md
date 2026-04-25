@@ -18,7 +18,7 @@ Last activity: 2026-04-26 — p13.03 TT-05 replay engine: ev_log_seek bsearch + 
 
 v1.0 shipped: 12 phases, 62 tests, ~30M IPS hybrid native JIT.
 p13.01: 3 tasks, 4 files created, 12 modified, 5->6 tests, 65 min.
-p13.02: 1 task, 1 file created, 2 modified, 6->8 tests, ~20 min.
+p13.02: 2 tasks, 1 file created, 3 modified, 6->8 tests, 30 min.
 p13.03: 2 tasks, 1 file created, 6 modified, 8->8 tests (snapshot tests already counted), 45 min.
 
 ## Accumulated Context
