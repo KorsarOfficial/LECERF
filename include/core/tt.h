@@ -1,6 +1,7 @@
 #ifndef CORTEX_M_TT_H
 #define CORTEX_M_TT_H
 
+#include <stdio.h>
 #include "core/types.h"
 #include "core/cpu.h"
 #include "core/bus.h"
@@ -50,9 +51,24 @@ typedef struct tt_periph_s {
     uart_t*    uart; /* used by 13-03 tt_inject_event for EVENT_UART_RX routing */
 } tt_periph_t;
 
-/* Forward decls; full defs land in 13-02 and 13-04. */
+/* snap_blob_t forward decl (full def below in snapshot section). */
 typedef struct snap_blob_s snap_blob_t;
-typedef struct tt_s        tt_t;
+
+/* snap_entry_t: parallel index entry for tt_t snap store. */
+typedef struct snap_entry_s {
+    u64 cycle;
+    u32 snap_idx;
+} snap_entry_t;
+
+/* tt_t: full time-travel state machine. */
+typedef struct tt_s {
+    u32 stride;
+    u32 max_snaps;
+    snap_blob_t*  snaps;  /* malloc(max_snaps * sizeof(snap_blob_t)) */
+    snap_entry_t* idx;    /* sorted by cycle, parallel array */
+    u32 n_snaps;
+    ev_log_t log;
+} tt_t;
 
 /* Event log */
 void ev_log_init  (ev_log_t* lg, u32 cap);
@@ -68,6 +84,26 @@ void tt_record_uart_rx(u64 cycle, u8 byte);
    NULL = no recording. Set by tt_create in 13-04. */
 extern tt_t* g_tt;
 extern bool  g_replay_mode; /* true during tt_replay; suppresses side effects */
+
+/* ---- TT core lifecycle (13-04) ---- */
+
+tt_t* tt_create    (u32 stride, u32 max_snaps);
+void  tt_destroy   (tt_t* tt);
+
+/* O(1): takes a snap iff cpu.cycles is on a stride boundary and budget not full. */
+void  tt_on_cycle  (tt_t* tt, cpu_t* c, bus_t* bus, tt_periph_t* p);
+
+/* Rewind: bsearch_le on snap idx, snap_restore, run_until_cycle to target. */
+bool  tt_rewind    (tt_t* tt, u64 target, cpu_t* c, bus_t* bus, tt_periph_t* p, jit_t* g);
+
+/* step_back(N): tt_rewind(cpu.cycles - N); whole-instruction granularity +/-1. */
+bool  tt_step_back (tt_t* tt, u64 n,      cpu_t* c, bus_t* bus, tt_periph_t* p, jit_t* g);
+
+/* diff: prints register + SRAM range-encoded deltas to FILE*. */
+void  tt_diff      (const snap_blob_t* a, const snap_blob_t* b, FILE* out);
+
+/* Wire jit_t for jit_reset_counters in snap_restore. */
+void  tt_attach_jit(jit_t* g);
 
 /* ---- Snapshot module (13-02) ---- */
 

@@ -50,13 +50,12 @@ u32 ev_log_seek(const ev_log_t* lg, u64 cycle) {
     return lo;
 }
 
-/* No-op stubs; 13-04 replaces bodies with ev_log_append calls once g_tt is wired. */
 void tt_record_irq(u64 cycle, u8 irq) {
-    (void)cycle; (void)irq;
+    if (g_tt && !g_replay_mode) ev_log_append(&g_tt->log, cycle, EVENT_IRQ_INJECT, (u32)irq);
 }
 
 void tt_record_uart_rx(u64 cycle, u8 byte) {
-    (void)cycle; (void)byte;
+    if (g_tt && !g_replay_mode) ev_log_append(&g_tt->log, cycle, EVENT_UART_RX, (u32)byte);
 }
 
 /* ---- Snapshot module (13-02) ---- */
@@ -178,4 +177,103 @@ bool tt_replay(const snap_blob_t* s, const ev_log_t* lg, u64 target,
     run_until_cycle(c, bus, target, p->st, p->scb, g, buf, n, &pos, p);
     g_replay_mode = prev;
     return true;
+}
+
+/* ---- TT core lifecycle (13-04) ---- */
+
+tt_t* tt_create(u32 stride, u32 max_snaps) {
+    if (!stride || !max_snaps) return NULL;
+    tt_t* tt = (tt_t*)calloc(1, sizeof(tt_t));
+    if (!tt) return NULL;
+    tt->stride    = stride;
+    tt->max_snaps = max_snaps;
+    tt->snaps = (snap_blob_t*)calloc(max_snaps, sizeof(snap_blob_t));
+    tt->idx   = (snap_entry_t*)calloc(max_snaps, sizeof(snap_entry_t));
+    if (!tt->snaps || !tt->idx) { tt_destroy(tt); return NULL; }
+    ev_log_init(&tt->log, 16u);
+    g_tt = tt;
+    return tt;
+}
+
+void tt_destroy(tt_t* tt) {
+    if (!tt) return;
+    if (g_tt == tt) g_tt = NULL;
+    free(tt->snaps);
+    free(tt->idx);
+    ev_log_free(&tt->log);
+    free(tt);
+}
+
+void tt_on_cycle(tt_t* tt, cpu_t* c, bus_t* bus, tt_periph_t* p) {
+    if (!tt || !c) return;
+    if (g_replay_mode) return;
+    if ((c->cycles % tt->stride) != 0u) return;
+    if (tt->n_snaps >= tt->max_snaps) return;
+    snap_blob_t* b = &tt->snaps[tt->n_snaps];
+    if (!snap_save(b, c, bus, p)) return;
+    tt->idx[tt->n_snaps].cycle    = c->cycles;
+    tt->idx[tt->n_snaps].snap_idx = tt->n_snaps;
+    tt->n_snaps++;
+}
+
+void tt_attach_jit(jit_t* g) {
+    g_jit_for_tt = g;
+}
+
+/* lower_bound: largest i s.t. idx[i].cycle <= target; -1 if none. */
+static int tt_bsearch_le(const snap_entry_t* a, u32 n, u64 target) {
+    int lo = 0, hi = (int)n - 1, best = -1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (a[mid].cycle <= target) { best = mid; lo = mid + 1; }
+        else                        hi = mid - 1;
+    }
+    return best;
+}
+
+bool tt_rewind(tt_t* tt, u64 target, cpu_t* c, bus_t* bus, tt_periph_t* p, jit_t* g) {
+    if (!tt || !c || !bus || !p) return false;
+    int i = tt_bsearch_le(tt->idx, tt->n_snaps, target);
+    if (i < 0) return false;
+    bool prev = g_replay_mode;
+    g_replay_mode = true;
+    if (!snap_restore(&tt->snaps[tt->idx[i].snap_idx], c, bus, p)) {
+        g_replay_mode = prev; return false;
+    }
+    if (target > c->cycles) {
+        u32 pos = ev_log_seek(&tt->log, c->cycles);
+        run_until_cycle(c, bus, target, p->st, p->scb, g,
+                        tt->log.buf, tt->log.n, &pos, p);
+    }
+    g_replay_mode = prev;
+    return true;
+}
+
+bool tt_step_back(tt_t* tt, u64 n, cpu_t* c, bus_t* bus, tt_periph_t* p, jit_t* g) {
+    if (!tt || !c) return false;
+    if (n > c->cycles) return false;
+    return tt_rewind(tt, c->cycles - n, c, bus, p, g);
+}
+
+void tt_diff(const snap_blob_t* a, const snap_blob_t* b, FILE* out) {
+    if (!a || !b || !out) return;
+    if (a->cycle != b->cycle)
+        fprintf(out, "cycle: %llu -> %llu\n",
+                (unsigned long long)a->cycle, (unsigned long long)b->cycle);
+    for (int i = 0; i < 16; ++i)
+        if (a->cpu.r[i] != b->cpu.r[i])
+            fprintf(out, "R%d: 0x%08x -> 0x%08x\n", i, a->cpu.r[i], b->cpu.r[i]);
+    if (a->cpu.apsr != b->cpu.apsr)
+        fprintf(out, "APSR: 0x%08x -> 0x%08x\n", a->cpu.apsr, b->cpu.apsr);
+    u32 sz = a->sram_size < b->sram_size ? a->sram_size : b->sram_size;
+    u32 j  = 0u;
+    while (j < sz) {
+        if (a->sram[j] != b->sram[j]) {
+            u32 k = j;
+            while (k < sz && a->sram[k] != b->sram[k]) k++;
+            fprintf(out, "SRAM[0x%08x..0x%08x]: %u bytes differ\n",
+                    SRAM_BASE_ADDR + j, SRAM_BASE_ADDR + k - 1u, k - j);
+            j = k;
+        } else { j++; }
+    }
 }
