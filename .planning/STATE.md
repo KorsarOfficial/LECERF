@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 ## Current Position
 
 Phase: 13
-Plan: 05 (next)
-Status: 13-01+13-02+13-03+13-04 complete; TT-01..TT-08 done; tt_t lifecycle + bsearch rewind + step_back + diff shipped
-Last activity: 2026-04-26 — p13.04 TT-06/07/08 tt_t lifecycle + bsearch rewind + step_back + diff <100ms@1M
+Plan: 05 (complete — phase done)
+Status: ALL 13-01..13-05 complete; TT-01..TT-08 all verified; firmware integration 3-run byte-eq passed; phase 13 shippable
+Last activity: 2026-04-26 — p13.05 TT-05/06/07/08 firmware integration test; tt_on_cycle stride fix
 
 ## Performance Metrics
 
@@ -21,6 +21,7 @@ p13.01: 3 tasks, 4 files created, 12 modified, 5->6 tests, 65 min.
 p13.02: 2 tasks, 1 file created, 3 modified, 6->8 tests, 30 min.
 p13.03: 2 tasks, 1 file created, 6 modified, 8->8 tests (snapshot tests already counted), 45 min.
 p13.04: 2 tasks, 1 file created, 3 modified, 8->9 tests, 35 min.
+p13.05: 2 tasks, 5 files created, 2 modified, 9->10 tests, 45 min.
 
 ## Accumulated Context
 
@@ -39,6 +40,9 @@ p13.04: 2 tasks, 1 file created, 3 modified, 8->9 tests, 35 min.
 - p13.04: tt_record_irq/uart_rx bodies replaced in-place (no weak override); targets in TT-06 test must be >= first snap cycle (stride boundary)
 - p13.04: tt_diff uses FILE* -> stdio.h added to tt.h; snap_entry_t defined in tt.h alongside full tt_t struct
 - p13.04: rewind mean latency 0.3ms at 1M history; bsearch 7 cmps + 0.14ms memcpy + worst-case 10K cycles forward replay
+- p13.05: tt_on_cycle stride-boundary fix: use last_snap_cycle+stride threshold (not %stride==0); modulo fails when startup adds non-zero cycle offset before first instruction batch
+- p13.05: firmware/test_tt flash at 0x00000000 (emulator default); volatile sram_pad needed to prevent optimizer from eliminating loops
+- p13.05: phase 13 complete; TT-01..TT-08 all satisfied; 10/10 tests pass; shippable
 
 ### Pending Todos
 
@@ -54,5 +58,5 @@ none.
 ## Session Continuity
 
 Last session: 2026-04-26
-Stopped at: Completed 13-04-PLAN.md
+Stopped at: Completed 13-05-PLAN.md (phase 13 complete)
 Resume file: none
