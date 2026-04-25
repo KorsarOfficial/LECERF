@@ -10,14 +10,16 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 ## Current Position
 
 Phase: 13
-Plan: 02 (next)
-Status: 13-01 complete; TT-01 determinism kernel done; ready for 13-02 snapshot
-Last activity: 2026-04-26 — p13.01 TT-01 determinism kernel: ev_t/ev_log_t/tt_periph_t, jit counters, bus_find_flat, uart replay-mode, nvic ext hook, 2-run byte-eq test
+Plan: 04 (next)
+Status: 13-01+13-02+13-03 complete; TT-01 determinism + TT-03/04 snapshot + TT-05 replay done; ready for 13-04 tt_t/rewind
+Last activity: 2026-04-26 — p13.03 TT-05 replay engine: ev_log_seek bsearch + tt_inject_event + run_until_cycle + tt_replay byte-eq
 
 ## Performance Metrics
 
 v1.0 shipped: 12 phases, 62 tests, ~30M IPS hybrid native JIT.
 p13.01: 3 tasks, 4 files created, 12 modified, 5->6 tests, 65 min.
+p13.02: 1 task, 1 file created, 2 modified, 6->8 tests, ~20 min.
+p13.03: 2 tasks, 1 file created, 6 modified, 8->8 tests (snapshot tests already counted), 45 min.
 
 ## Accumulated Context
 
@@ -30,6 +32,9 @@ p13.01: 3 tasks, 4 files created, 12 modified, 5->6 tests, 65 min.
 - p13.01: tt_record_irq/uart_rx use strong no-ops (MinGW static-lib weak symbol gap); 13-04 replaces bodies
 - p13.01: run_steps_full_g(jit_t*) is the TT determinism path; run_steps_full_gdb(gdb_t*) keeps gdb integration
 - p13.01: jit_t is ~2MB; must not be stack-allocated (Windows 1MB default stack)
+- p13.02: snap_blob_t includes uart_state (rx_q/replay_mode); eth.bus zeroed on save, refilled on restore
+- p13.03: run_until_cycle in run.c (co-located with run_steps_full_g), declared in tt.h; run.h uses struct forward decls
+- p13.03: snap_blob_t ~263KB; must be static in tests, same as jit_t ~2MB
 
 ### Pending Todos
 
@@ -45,5 +50,5 @@ none.
 ## Session Continuity
 
 Last session: 2026-04-26
-Stopped at: Completed 13-01-PLAN.md
+Stopped at: Completed 13-03-PLAN.md
 Resume file: none
