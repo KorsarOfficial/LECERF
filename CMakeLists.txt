@@ -34,6 +34,7 @@ set(CORE_SRC
     src/core/fpu.c
     src/core/gdb.c
     src/core/jit.c
+    src/core/codegen.c
     src/periph/uart.c
     src/periph/systick.c
     src/periph/scb.c

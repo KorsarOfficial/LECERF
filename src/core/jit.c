@@ -4,6 +4,7 @@
 void jit_init(jit_t* j) {
     memset(j, 0, sizeof(*j));
     for (u32 i = 0; i < JIT_MAX_BLOCKS; ++i) j->lookup_idx[i] = -1;
+    codegen_init(&j->cg);
 }
 
 static int lookup(jit_t* j, u32 pc) {
@@ -38,6 +39,7 @@ static jit_block_t* compile_block(jit_t* j, bus_t* b, u32 pc) {
     jit_block_t* bk = &j->blocks[j->n_blocks];
     bk->pc_start = pc;
     bk->n_ins = 0;
+    bk->native = NULL;
     u32 cur = pc;
     while (bk->n_ins < JIT_MAX_BLOCK_LEN) {
         insn_t ins;
@@ -48,6 +50,8 @@ static jit_block_t* compile_block(jit_t* j, bus_t* b, u32 pc) {
         if (is_terminator(ins.op)) break;
     }
     bk->pc_end = cur;
+    /* Try native codegen for whole block. */
+    bk->native = codegen_emit(&j->cg, bk->ins, bk->n_ins);
     install(j, pc, (int)j->n_blocks);
     j->n_blocks++;
     return bk;
@@ -74,18 +78,23 @@ bool jit_run(jit_t* j, cpu_t* c, bus_t* b, exec_fn execute, u64* out_steps) {
     } else {
         bk = &j->blocks[idx];
     }
-    /* Execute the block. We DO re-execute through interpreter, but we save
-       the decode and the loop-overhead branches by iterating the
-       pre-decoded array. For pure compute blocks this is ~2× faster. */
     u64 steps = 0;
-    for (u8 i = 0; i < bk->n_ins; ++i) {
-        if (c->halted) break;
-        c->r[REG_PC] = bk->ins[i].pc;
-        if (!execute(c, b, &bk->ins[i])) break;
-        steps++;
-        /* Terminator instructions modify PC explicitly; bail out so the
-           outer loop can re-check exceptions / lookup new block. */
-        if (is_terminator(bk->ins[i].op)) break;
+    if (bk->native) {
+        /* x86 thunk: writes regs + pc directly. Fall back if it fails. */
+        if (bk->native(c, b)) {
+            steps = bk->n_ins;
+            j->native_steps += steps;
+        }
+    }
+    if (steps == 0) {
+        /* Interpret pre-decoded ins[]. */
+        for (u8 i = 0; i < bk->n_ins; ++i) {
+            if (c->halted) break;
+            c->r[REG_PC] = bk->ins[i].pc;
+            if (!execute(c, b, &bk->ins[i])) break;
+            steps++;
+            if (is_terminator(bk->ins[i].op)) break;
+        }
     }
     j->jit_steps += steps;
     *out_steps = steps;

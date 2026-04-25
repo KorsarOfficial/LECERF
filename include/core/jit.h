@@ -5,6 +5,7 @@
 #include "core/cpu.h"
 #include "core/bus.h"
 #include "core/decoder.h"
+#include "core/codegen.h"
 
 /* Basic-block JIT: count how many times each PC starts a block; once a
    threshold is exceeded, compile a sequence of decoded ARM ops into a
@@ -28,17 +29,19 @@ typedef struct jit_block_s {
     u32 hits;
     u8  n_ins;
     insn_t ins[JIT_MAX_BLOCK_LEN];
+    cg_thunk_t native;     /* non-NULL = compiled to x86 machine code */
 } jit_block_t;
 
 typedef struct jit_s {
     jit_block_t blocks[JIT_MAX_BLOCKS];
     u32 n_blocks;
-    /* Direct-mapped lookup: pc → block index */
     u32 lookup_pc[JIT_MAX_BLOCKS];
     int lookup_idx[JIT_MAX_BLOCKS];
     int lookup_n;
     u64 jit_steps;
+    u64 native_steps;
     u64 interp_steps;
+    codegen_t cg;
 } jit_t;
 
 void jit_init(jit_t* j);
