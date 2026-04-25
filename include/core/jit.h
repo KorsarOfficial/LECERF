@@ -41,6 +41,7 @@ typedef struct jit_s {
     u64 jit_steps;
     u64 native_steps;
     u64 interp_steps;
+    u32 counters[JIT_MAX_BLOCKS]; /* hot-block hit counters */
     codegen_t cg;
 } jit_t;
 
@@ -48,5 +49,6 @@ void jit_init(jit_t* j);
 /* Try to fast-execute starting at PC. Returns true if at least one insn ran
    via JIT cache; updates *out_steps. */
 bool jit_run(jit_t* j, cpu_t* c, bus_t* b, exec_fn execute, u64* out_steps);
+void jit_reset_counters(jit_t* g);
 
 #endif

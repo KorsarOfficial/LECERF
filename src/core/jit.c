@@ -69,10 +69,7 @@ bool jit_run(jit_t* j, cpu_t* c, bus_t* b, exec_fn execute, u64* out_steps) {
             j->lookup_pc[h] = pc;
             j->lookup_idx[h] = -2; /* -2 = counting */
         }
-        /* Promote on counter; we don't have separate counters here, so
-           just compile after a few visits via this path. */
-        static u32 counters[JIT_MAX_BLOCKS];
-        if (++counters[h] < JIT_HOT_THRESHOLD) { *out_steps = 0; return false; }
+        if (++j->counters[h] < JIT_HOT_THRESHOLD) { *out_steps = 0; return false; }
         bk = compile_block(j, b, pc);
         if (!bk) { *out_steps = 0; return false; }
     } else {
@@ -99,4 +96,9 @@ bool jit_run(jit_t* j, cpu_t* c, bus_t* b, exec_fn execute, u64* out_steps) {
     j->jit_steps += steps;
     *out_steps = steps;
     return steps > 0;
+}
+
+void jit_reset_counters(jit_t* g) {
+    if (!g) return;
+    for (u32 i = 0; i < JIT_MAX_BLOCKS; ++i) g->counters[i] = 0;
 }

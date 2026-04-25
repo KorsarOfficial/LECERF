@@ -79,3 +79,11 @@ bool bus_load_blob(bus_t* b, addr_t a, const u8* data, u32 n) {
     memcpy(r->buf + off, data, n);
     return true;
 }
+
+region_t* bus_find_flat(bus_t* b, addr_t base) {
+    for (u32 i = 0; i < b->n; ++i) {
+        region_t* r = &b->regs[i];
+        if (r->kind == REGION_FLAT && r->base == base) return r;
+    }
+    return NULL;
+}

@@ -58,4 +58,7 @@ void bus_w8 (bus_t* b, addr_t a, u8  v);
 /* Load a firmware blob into a flat region at given address. */
 bool bus_load_blob(bus_t* b, addr_t a, const u8* data, u32 n);
 
+/* Find a REGION_FLAT region by exact base address; NULL if not found. */
+region_t* bus_find_flat(bus_t* b, addr_t base);
+
 #endif
