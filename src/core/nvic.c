@@ -1,4 +1,5 @@
 #include "core/nvic.h"
+#include "core/tt.h"
 
 /* === NVIC peripheral MMIO (ARM ARM B3.4) === */
 static u32 nvic_read(void* ctx, addr_t off, u32 size) {
@@ -23,6 +24,11 @@ static void nvic_write(void* ctx, addr_t off, u32 v, u32 size) {
 }
 void nvic_set_pending(nvic_t* n, u32 irq) {
     if (irq < NVIC_IRQ_LINES) n->pending[irq >> 5] |= (1u << (irq & 31));
+}
+
+void nvic_set_pending_ext(nvic_t* n, u32 irq, u64 cycle) {
+    if (g_tt && !g_replay_mode) tt_record_irq(cycle, (u8)irq);
+    nvic_set_pending(n, irq);
 }
 void nvic_clear_pending(nvic_t* n, u32 irq) {
     if (irq < NVIC_IRQ_LINES) n->pending[irq >> 5] &= ~(1u << (irq & 31));

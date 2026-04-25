@@ -17,3 +17,7 @@ add_test(NAME memory COMMAND test_memory)
 add_executable(test_t32 test_t32.c)
 target_link_libraries(test_t32 PRIVATE cortex_m_core)
 add_test(NAME t32 COMMAND test_t32)
+
+add_executable(test_tt_determinism test_tt_determinism.c)
+target_link_libraries(test_tt_determinism PRIVATE cortex_m_core)
+add_test(NAME tt_determinism COMMAND test_tt_determinism)

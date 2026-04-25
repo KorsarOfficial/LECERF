@@ -39,7 +39,9 @@ typedef struct nvic_s {
 
 struct bus_s;
 int  nvic_attach(struct bus_s* b, nvic_t* n);
-void nvic_set_pending(nvic_t* n, u32 irq);
+void nvic_set_pending    (nvic_t* n, u32 irq);
+/* External injection path: logs EVENT_IRQ_INJECT when g_tt is set. */
+void nvic_set_pending_ext(nvic_t* n, u32 irq, u64 cycle);
 int  nvic_pick(const nvic_t* n);   /* returns lowest-numbered pending+enabled IRQ, -1 */
 void nvic_clear_pending(nvic_t* n, u32 irq);
 void nvic_set_active(nvic_t* n, u32 irq);

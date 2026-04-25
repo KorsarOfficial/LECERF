@@ -47,11 +47,11 @@ u32 ev_log_seek(const ev_log_t* lg, u64 cycle) {
     return lo;
 }
 
-/* Weak no-op stubs; 13-04 provides strong overrides. */
-__attribute__((weak)) void tt_record_irq(u64 cycle, u8 irq) {
+/* No-op stubs; 13-04 replaces bodies with ev_log_append calls once g_tt is wired. */
+void tt_record_irq(u64 cycle, u8 irq) {
     (void)cycle; (void)irq;
 }
 
-__attribute__((weak)) void tt_record_uart_rx(u64 cycle, u8 byte) {
+void tt_record_uart_rx(u64 cycle, u8 byte) {
     (void)cycle; (void)byte;
 }
