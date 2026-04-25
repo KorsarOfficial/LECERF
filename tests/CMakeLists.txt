@@ -33,3 +33,9 @@ add_test(NAME tt_replay COMMAND test_tt_replay)
 add_executable(test_tt_rewind test_tt_rewind.c)
 target_link_libraries(test_tt_rewind PRIVATE cortex_m_core)
 add_test(NAME tt_rewind COMMAND test_tt_rewind)
+
+add_executable(test_tt_firmware test_tt_firmware.c)
+target_link_libraries(test_tt_firmware PRIVATE cortex_m_core)
+target_compile_definitions(test_tt_firmware PRIVATE
+    FIRMWARE_BIN_PATH="${CMAKE_SOURCE_DIR}/firmware/test_tt/test_tt.bin")
+add_test(NAME tt_firmware COMMAND test_tt_firmware)

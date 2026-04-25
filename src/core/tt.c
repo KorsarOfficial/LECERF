@@ -207,7 +207,13 @@ void tt_destroy(tt_t* tt) {
 void tt_on_cycle(tt_t* tt, cpu_t* c, bus_t* bus, tt_periph_t* p) {
     if (!tt || !c) return;
     if (g_replay_mode) return;
-    if ((c->cycles % tt->stride) != 0u) return;
+    /* snap when cycles cross the next stride boundary (not strict modulo:
+       run_steps_full_g runs N instructions, not N cycles, so c->cycles may
+       overshoot a boundary by a few cycles). */
+    u64 next = (tt->n_snaps == 0u)
+               ? (u64)tt->stride
+               : tt->idx[tt->n_snaps - 1u].cycle + (u64)tt->stride;
+    if (c->cycles < next) return;
     if (tt->n_snaps >= tt->max_snaps) return;
     snap_blob_t* b = &tt->snaps[tt->n_snaps];
     if (!snap_save(b, c, bus, p)) return;
