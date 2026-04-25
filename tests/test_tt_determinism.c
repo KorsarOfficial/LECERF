@@ -30,12 +30,12 @@ static const u8 k_blob[] = {
 #define FLASH_BASE 0x00000000u
 #define FLASH_SIZE (1u << 20)
 #define SRAM_BASE  0x20000000u
-#define SRAM_SIZE  (64u << 10)
+#define TEST_SRAM_SIZE (64u << 10)
 
 static void run_one(cpu_t* c, bus_t* b, u64 n) {
     bus_init(b);
     bus_add_flat(b, "flash", FLASH_BASE, FLASH_SIZE, false);
-    bus_add_flat(b, "sram",  SRAM_BASE,  SRAM_SIZE,  true);
+    bus_add_flat(b, "sram",  SRAM_BASE,  TEST_SRAM_SIZE, true);
     bus_load_blob(b, FLASH_BASE, k_blob, (u32)sizeof(k_blob));
 
     cpu_reset(c, CORE_M4);

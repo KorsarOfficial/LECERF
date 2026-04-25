@@ -10,6 +10,7 @@
 #include "periph/dwt.h"
 #include "core/gdb.h"
 #include "core/jit.h"
+#include "core/tt.h"
 
 static jit_t g_jit;
 static int g_jit_inited = 0;
@@ -165,4 +166,25 @@ u64 run_steps_st(cpu_t* c, bus_t* bus, u64 max_steps, systick_t* st) {
 
 u64 run_steps(cpu_t* c, bus_t* bus, u64 max_steps) {
     return run_steps_full(c, bus, max_steps, NULL, NULL);
+}
+
+u64 run_until_cycle(cpu_t* c, bus_t* bus, u64 target,
+                    systick_t* st, scb_t* scb, jit_t* g,
+                    const ev_t* log, u32 log_n, u32* log_pos,
+                    tt_periph_t* p) {
+    u64 start = c->cycles;
+    while (c->cycles < target) {
+        while (log && log_pos && *log_pos < log_n && log[*log_pos].cycle <= c->cycles) {
+            tt_inject_event(c, bus, p, &log[*log_pos]);
+            (*log_pos)++;
+        }
+        u64 next_ev = (log && log_pos && *log_pos < log_n) ? log[*log_pos].cycle : target;
+        u64 stop    = (next_ev < target) ? next_ev : target;
+        u64 gap     = stop - c->cycles;
+        if (gap == 0u) break;
+        u64 prev = c->cycles;
+        run_steps_full_g(c, bus, gap, st, scb, g);
+        if (c->cycles == prev) break;  /* watchdog: no forward progress */
+    }
+    return c->cycles - start;
 }
