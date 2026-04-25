@@ -22,6 +22,7 @@ This is the unique USP that beats QEMU/Renode.
 
 **Depends on:** v1.0 (existing emulator).
 **Requirements:** TT-01..TT-08
+**Plans:** 5 plans
 
 **Success criteria (observable):**
 1. running same firmware twice with same event log produces byte-equal final state
@@ -31,11 +32,11 @@ This is the unique USP that beats QEMU/Renode.
 5. all 14 v1.0 firmware tests still pass
 
 **Plans:**
-- 13-01: determinism kernel — strip rand, isolate I/O into event log
-- 13-02: snapshot module — copy-on-write state, serialization
-- 13-03: replay engine — reapply event log, validate byte-equality
-- 13-04: rewind primitives — nearest-snapshot seek, step_back
-- 13-05: time-travel firmware test (rewind + diff)
+- [ ] 13-01-PLAN.md — determinism kernel: ev_t/ev_log_t, jit_t.counters[], bus_find_flat, uart.replay_mode (Wave 1)
+- [ ] 13-02-PLAN.md — snapshot module: snap_blob_t (~263KB) memcpy save/restore + xor32 + file rt (Wave 2)
+- [ ] 13-03-PLAN.md — replay engine: ev_log_seek + tt_inject_event + run_until_cycle + tt_replay (Wave 2)
+- [ ] 13-04-PLAN.md — rewind primitives: tt_t lifecycle + bsearch rewind + step_back + diff <100ms@1M (Wave 3)
+- [ ] 13-05-PLAN.md — time-travel firmware test: fw_tt 50K cycles, 3-run byte-eq REF=rewind=stepback (Wave 4)
 
 ---
 
@@ -136,10 +137,19 @@ This is the meridian-ci product face.
 
 | Phase | Plans | Status |
 |-------|-------|--------|
-| 13. Time-Travel Kernel | 5 | Not started |
+| 13. Time-Travel Kernel | 5 | Planned |
 | 14. JIT Depth          | 5 | Not started |
 | 15. WASM + Web IDE     | 5 | Not started |
 | 16. Python API + CI    | 5 | Not started |
 | 17. Landing & Dist     | 4 | Not started |
 
 **Total:** 24 plans across 5 phases.
+
+## Wave Plan: Phase 13
+
+| Wave | Plans                | Depends on        | Notes                                                 |
+|------|----------------------|-------------------|-------------------------------------------------------|
+| 1    | 13-01                | (none)            | Determinism kernel: tt.h types, jit_t.cnt[], hooks    |
+| 2    | 13-02, 13-03         | 13-01             | Parallel: snapshot + replay engine (no file overlap)  |
+| 3    | 13-04                | 13-02, 13-03      | tt_t lifecycle + rewind/step_back/diff                |
+| 4    | 13-05                | 13-04             | Integration firmware + 3-run byte-eq                  |
