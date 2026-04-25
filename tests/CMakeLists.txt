@@ -21,3 +21,11 @@ add_test(NAME t32 COMMAND test_t32)
 add_executable(test_tt_determinism test_tt_determinism.c)
 target_link_libraries(test_tt_determinism PRIVATE cortex_m_core)
 add_test(NAME tt_determinism COMMAND test_tt_determinism)
+
+add_executable(test_tt_snapshot test_tt_snapshot.c)
+target_link_libraries(test_tt_snapshot PRIVATE cortex_m_core)
+add_test(NAME tt_snapshot COMMAND test_tt_snapshot)
+
+add_executable(test_tt_replay test_tt_replay.c)
+target_link_libraries(test_tt_replay PRIVATE cortex_m_core)
+add_test(NAME tt_replay COMMAND test_tt_replay)
