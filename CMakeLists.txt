@@ -32,16 +32,23 @@ set(CORE_SRC
     src/core/nvic.c
     src/core/run.c
     src/core/fpu.c
+    src/core/gdb.c
     src/periph/uart.c
     src/periph/systick.c
     src/periph/scb.c
     src/periph/mpu.c
+    src/periph/stm32.c
+    src/periph/dwt.c
 )
 
 add_library(cortex_m_core STATIC ${CORE_SRC})
 
 add_executable(cortex-m tools/main.c)
 target_link_libraries(cortex-m PRIVATE cortex_m_core)
+if(WIN32)
+    target_link_libraries(cortex-m PRIVATE ws2_32)
+    target_link_libraries(cortex_m_core PRIVATE ws2_32)
+endif()
 
 enable_testing()
 add_subdirectory(tests)

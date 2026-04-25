@@ -70,6 +70,9 @@ run_test test8_fpu "R0=00000005 R1=00000006 R2=00000001"
 # test9: FreeRTOS Queue producer/consumer Σ(1..10)=55
 run_test_freertos test9_freertos_ipc "R0=00000037 R1=0000000a"
 
+# test10: STM32F103 Blue Pill blink — RCC + GPIOC PC13 + USART1
+run_test test10_stm32_blink "R0=00000005"
+
 echo ""
 echo "===== $PASS passed, $FAIL failed ====="
 [ $FAIL -eq 0 ]

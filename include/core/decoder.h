@@ -138,6 +138,7 @@ typedef struct insn_s {
 /* Decode at PC. Returns size (2 or 4). Sets out->op = OP_UNDEFINED on fail. */
 struct bus_s;
 u8 decode(struct bus_s* bus, addr_t pc, insn_t* out);
+void run_dcache_invalidate(void);
 
 const char* opcode_name(opcode_t op);
 

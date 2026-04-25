@@ -9,7 +9,14 @@
 #include "periph/systick.h"
 #include "periph/scb.h"
 #include "periph/mpu.h"
+#include "periph/stm32.h"
+#include "periph/dwt.h"
+#include "core/gdb.h"
 
+extern dwt_t* g_dwt_for_run;
+
+extern u64 run_steps_full_g(cpu_t* c, bus_t* bus, u64 max_steps,
+                            systick_t* st, scb_t* scb, gdb_t* gdb);
 extern u64 run_steps_full(cpu_t* c, bus_t* bus, u64 max_steps, systick_t* st, scb_t* scb);
 
 /* Cortex-M memory layout defaults (ARM ARM B3):
@@ -39,10 +46,15 @@ static u8* read_file(const char* path, u32* out_size) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <firmware.bin> [max_steps]\n", argv[0]);
+        fprintf(stderr, "usage: %s <firmware.bin> [max_steps] [--gdb=PORT]\n", argv[0]);
         return 1;
     }
-    u64 max_steps = argc >= 3 ? strtoull(argv[2], NULL, 0) : 10000000ull;
+    u64 max_steps = 10000000ull;
+    int gdb_port = 0;
+    for (int i = 2; i < argc; ++i) {
+        if (strncmp(argv[i], "--gdb=", 6) == 0) gdb_port = atoi(argv[i] + 6);
+        else max_steps = strtoull(argv[i], NULL, 0);
+    }
 
     u32 sz = 0;
     u8* blob = read_file(argv[1], &sz);
@@ -59,6 +71,12 @@ int main(int argc, char** argv) {
     scb_attach(&bus, &scb);
     static mpu_t mpu = {0};
     mpu_attach(&bus, &mpu);
+    static stm32_t stm32;
+    stm32_attach(&bus, &stm32);
+    stm32.quiet = (gdb_port > 0);
+    static dwt_t dwt = {0};
+    dwt_attach(&bus, &dwt);
+    g_dwt_for_run = &dwt;
     bus_load_blob(&bus, FLASH_BASE, blob, sz);
     free(blob);
 
@@ -70,7 +88,15 @@ int main(int argc, char** argv) {
     u32 entry = bus_r32(&bus, 0x4) & ~1u;
     cpu.r[REG_PC] = entry ? entry : FLASH_BASE;
 
-    u64 n = run_steps_full(&cpu, &bus, max_steps, &systick, &scb);
+    static gdb_t gdb = {0};
+    gdb_t* g = NULL;
+    if (gdb_port > 0) {
+        if (gdb_listen(&gdb, gdb_port)) g = &gdb;
+        else fprintf(stderr, "[gdb] failed to listen on :%d\n", gdb_port);
+    }
+
+    u64 n = run_steps_full_g(&cpu, &bus, max_steps, &systick, &scb, g);
+    if (g) gdb_close(g);
 
     fprintf(stderr, "halted after %llu instructions\n", (unsigned long long)n);
     fprintf(stderr, "R0=%08x R1=%08x R2=%08x R3=%08x\n",
