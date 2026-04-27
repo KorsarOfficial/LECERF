@@ -511,17 +511,15 @@ static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
         /* fast body: r10_imm64(10) + r11d_eax(3) + add(3) + sub(7) = 23B setup
            + cnt*(ld_ecx(7) + store(7)) = cnt*14B */
         u32 fast_body = 23u + cnt * 14u;
-        /* slow body: ld_eax(7) + cnt*(sub_rsp(4)+mov_rcx(3)+mov_edx(2)+[add_edx(6)?]+mov_r8d(6)+mov_r9d(7)+mov_rax(10)+call(2)+add_rsp(4)+test(4)+or(3)) */
-        /* jmp_short to skip slow: 2B */
-        u32 slow_body = 7u + cnt * (4u+3u+2u+6u+6u+7u+10u+2u+4u+4u+3u);
-        /* jb rel8 from end of jb instr: skip past (5+2) + fast_body + 2 = fast_body+9 bytes
-           to reach slow path. But rel8 is signed; max 127. If too large, use long jmp. */
-        /* Offset from end of jb(2B) instruction = 5(second_cmp) + 2(ja) + fast_body + 2(jmp_short) */
-        u32 jb_target = 5u + 2u + fast_body + 2u;   /* to start of slow */
-        u32 ja_target = fast_body + 2u;              /* from end of ja to start of slow */
-        (void)slow_body;
+        /* slow body: ld_eax(7) + cnt*(sub_rsp(4)+mov_rcx(3)+mov_edx(2)+add_edx(6)+mov_r8d(6)+
+                                        mov_r9d(7)+mov_rax(10)+call(2)+add_rsp(4)+test(4)+or(3)) = 51B/reg */
+        u32 slow_body = 7u + cnt * 51u;
+        /* jmp size: 2B if slow fits in rel8, else 5B for near jmp */
+        u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
+        /* jb/ja targets: from end of jcc(2B) to start of slow_path */
+        u32 jb_target = 5u + 2u + fast_body + jmp_sz;   /* cmp2(5)+ja(2)+fast+jmp */
+        u32 ja_target = fast_body + jmp_sz;              /* fast+jmp */
         if (jb_target > 127u || ja_target > 127u) {
-            /* bounds too large for rel8; skip fast path entirely */
             goto slow_only_push;
         }
 
@@ -544,17 +542,11 @@ static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
             mov_r11_off_ecx(cg, k_off);
             k_off += 4u;
         }
-        /* jmp_short over slow; slow_body is variable. Compute actual slow body size:
-           ld_eax(7) + per-reg size. For bus_write with add_edx: first reg has no add_edx,
-           the rest do. */
-        {
-            u32 sb = 7u; /* ld_eax */
-            for (int k = 0, ki = 0; k <= 14; k++) {
-                if (!(reg_list & (1u << k))) continue;
-                sb += 4u+3u+2u+6u+7u+10u+2u+4u+4u+3u;  /* always add_edx(6) for simplicity */
-                ki++;
-            }
-            jmp_short(cg, (u8)sb);
+        /* jmp over inline slow path */
+        if (slow_body <= 127u) {
+            jmp_short(cg, (u8)slow_body);
+        } else {
+            emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
 
         /* slow path */
@@ -617,13 +609,20 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
     if (sram && sram->buf) {
         u32 fbase = sram->base;
         u32 fsize = sram->size;
-        /* fast body: r10(10)+r11d(3)+add(3)+sub(7)=23 setup
-           + cnt*(load_from_r11(7) + store_to_reg_or_pc(7)) (excl PC cmp) */
-        u32 fast_cnt = cnt; /* inc PC if present */
-        u32 fast_body = 23u + fast_cnt * 14u;
-        if (has_pc) fast_body += 6u + 2u + 3u + 7u;  /* cmp(6)+jae(2)+and(6)+st_pc(11) extra for PC */
-        u32 ja_target  = fast_body + 2u;             /* from end of ja(2) to slow */
-        u32 jb_target  = 5u + 2u + fast_body + 2u;  /* from end of jb(2) */
+        /* fast body: setup(23) + cnt*(load_from_r11(7)+store_to_reg_or_pc(7)) + sp_update(7+5+7=19) */
+        u32 fast_body = 23u + cnt * 14u + 19u;
+        if (has_pc) fast_body += 6u + 2u + 6u + 7u;  /* cmp(6)+jae(2)+and(6)+st_pc(7+4=11) -> see fast PC code */
+        /* slow body: ld_eax(7) + cnt*(60B non-PC or 56B PC) + sp_update(7+5+7) + pc_commit */
+        u32 slow_body = 7u;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            slow_body += (k == 15) ? 56u : 60u;
+        }
+        slow_body += 7u + 5u + 7u;
+        if (has_pc) slow_body += 9u + 2u + 9u + 9u;
+        u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
+        u32 ja_target = fast_body + jmp_sz;         /* from end of ja(2) to slow */
+        u32 jb_target = 5u + 2u + fast_body + jmp_sz; /* from end of jb(2) */
         if (jb_target > 127u || ja_target > 127u) goto slow_only_pop;
 
         u32 hi = fbase + fsize - cnt * 4u;
@@ -662,18 +661,11 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
         add_imm(cg, cnt * 4u);
         st_eax(cg, REG_SP);
 
-        /* compute slow body size for jmp_short */
-        {
-            /* each bus_read: sub(4)+rcx(3)+edx(2)+add_edx(6)+r8d(6)+lea_r9(4)+rax(10)+call(2)+ecx_rsp(3)+add_rsp(4)+test(4)+or(3)+jmp(2)+store(7) = 60B */
-            u32 sb = 7u; /* ld_eax(SP) for slow path */
-            for (int k = 0; k <= 15; k++) {
-                if (!(reg_list & (1u << k))) continue;
-                sb += 60u;
-                if (k == 15) sb += 3u; /* mov r10d, ecx instead of st_ecx(7) is 3B; delta = -4 */
-            }
-            sb += 7u + 5u + 7u; /* SP update: ld_eax(7)+add_imm(5)+st_eax(7) */
-            if (has_pc) sb += 9u + 2u + 9u + 9u; /* cmp+jae+and+store r10d */
-            jmp_short(cg, (u8)sb);
+        /* jmp over inline slow path (slow_body pre-computed above) */
+        if (slow_body <= 127u) {
+            jmp_short(cg, (u8)slow_body);
+        } else {
+            emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
         /* slow path (reached via bounds-check fallthrough only): */
         ld_eax(cg, REG_SP);
@@ -772,10 +764,36 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
     if (sram && sram->buf) {
         u32 fbase = sram->base;
         u32 fsize = sram->size;
-        /* PC handling adds extra bytes; conservatively add 20 */
-        u32 fast_body = 23u + cnt * 14u + (has_pc ? 20u : 0u) + (writeback ? 14u : 0u);
-        u32 ja_target = fast_body + 2u;
-        u32 jb_target = 5u + 2u + fast_body + 2u;
+        /* fast body = setup(23) + per_reg + writeback(19 if wb) */
+        u32 fast_body = 23u;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            if (is_load) {
+                fast_body += 14u; /* mov_ecx_r11_off(7)+st_ecx(7) */
+                if (k == 15) fast_body += 6u+2u+6u+7u - 7u; /* replace st_ecx(7) with cmp(6)+jae(2)+and(6)+st_pc(7) */
+            } else {
+                if (k == 15) {
+                    fast_body += 5u + 7u + 7u + 5u; /* mov_eax_imm(5)+mov_r11_off_eax(7)+ld_eax(7)+sub_imm?(5) */
+                    if (!is_db) fast_body -= 5u; /* sub_imm only if is_db */
+                } else {
+                    fast_body += 14u; /* ld_ecx(7)+mov_r11_off_ecx(7) */
+                }
+            }
+        }
+        if (writeback) fast_body += 7u + 5u + 7u; /* ld_eax+add/sub+st_eax */
+        /* slow body: precompute exact size */
+        u32 slow_body = 7u; /* ld_eax(rn) */
+        if (is_db) slow_body += 5u;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            slow_body += is_load ? ((k == 15) ? 56u : 60u)
+                                 : ((k == 15) ? 50u : 51u);
+        }
+        if (writeback) slow_body += 7u+5u+7u;
+        if (has_pc) slow_body += 9u+2u+9u+9u;
+        u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
+        u32 ja_target = fast_body + jmp_sz;
+        u32 jb_target = 5u + 2u + fast_body + jmp_sz;
         if (jb_target > 127u || ja_target > 127u) goto slow_only_ldm;
 
         u32 hi = fbase + fsize - cnt * 4u;
@@ -836,22 +854,11 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             }
         }
 
-        {
-            /* compute slow body size to jmp over it */
-            u32 sb = 7u; /* ld_eax(rn) */
-            if (is_db) sb += 5u;
-            for (int k = 0; k <= 15; k++) {
-                if (!(reg_list & (1u << k))) continue;
-                if (is_load) {
-                    sb += 4u+3u+2u+6u+6u+10u+2u+4u+11u+7u+4u+4u+3u;
-                    if (k == 15) sb += 6u+2u+6u+7u;
-                } else {
-                    sb += 4u+3u+2u+6u+6u+7u+10u+2u+4u+4u+3u;
-                }
-            }
-            if (writeback) sb += 7u+5u+7u;
-            if (has_pc) sb += 9u+2u+9u+9u;
-            jmp_short(cg, (u8)sb);
+        /* jmp over inline slow path (slow_body pre-computed above) */
+        if (slow_body <= 127u) {
+            jmp_short(cg, (u8)slow_body);
+        } else {
+            emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
         /* inline slow path for bounds-fail case */
         ld_eax(cg, rn);
