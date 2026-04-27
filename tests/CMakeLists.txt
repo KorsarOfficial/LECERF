@@ -67,3 +67,8 @@ add_test(NAME jit_chain COMMAND test_jit_chain)
 add_executable(test_jit_systick test_jit_systick.c)
 target_link_libraries(test_jit_systick PRIVATE cortex_m_core)
 add_test(NAME jit_systick COMMAND test_jit_systick)
+
+add_executable(test_jit_bench test_jit_bench.c)
+target_link_libraries(test_jit_bench PRIVATE cortex_m_core)
+add_test(NAME jit_bench COMMAND test_jit_bench)
+set_tests_properties(jit_bench PROPERTIES RUN_SERIAL TRUE)

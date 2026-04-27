@@ -100,7 +100,9 @@ u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
             const bool* stop = scb ? &scb->pendsv_pending : NULL;
             if (jit_run_chained(&g_jit, c, bus, execute, budget, &jit_steps, stop) && jit_steps > 0) {
                 if (st) systick_tick(st, (u32)jit_steps);
-                if (g_dwt_for_run) for (u64 k = 0; k < jit_steps; ++k) dwt_tick(g_dwt_for_run);
+                /* Batch DWT update: semantically equivalent to the per-step loop but O(1). */
+                if (g_dwt_for_run && (g_dwt_for_run->ctrl & 1u) && (g_dwt_for_run->demcr & (1u << 24)))
+                    g_dwt_for_run->cyccnt += (u32)jit_steps;
                 i += jit_steps - 1;
                 goto check_irqs_gdb;
             }
@@ -110,7 +112,8 @@ u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
             const bool* stop = scb ? &scb->pendsv_pending : NULL;
             if (jit_run_chained(&g_jit, c, bus, execute, budget, &jit_steps, stop) && jit_steps > 0) {
                 if (st) systick_tick(st, (u32)jit_steps);
-                if (g_dwt_for_run) for (u64 k = 0; k < jit_steps; ++k) dwt_tick(g_dwt_for_run);
+                if (g_dwt_for_run && (g_dwt_for_run->ctrl & 1u) && (g_dwt_for_run->demcr & (1u << 24)))
+                    g_dwt_for_run->cyccnt += (u32)jit_steps;
                 i += jit_steps - 1;
                 goto check_irqs_gdb;
             }
@@ -163,7 +166,8 @@ u64 run_steps_full_g(cpu_t* c, bus_t* bus, u64 max_steps,
         const bool* stop = scb ? &scb->pendsv_pending : NULL;
         if (g && jit_run_chained(g, c, bus, execute, budget, &jit_steps, stop) && jit_steps > 0) {
             if (st) systick_tick(st, (u32)jit_steps);
-            if (g_dwt_for_run) for (u64 k = 0; k < jit_steps; ++k) dwt_tick(g_dwt_for_run);
+            if (g_dwt_for_run && (g_dwt_for_run->ctrl & 1u) && (g_dwt_for_run->demcr & (1u << 24)))
+                g_dwt_for_run->cyccnt += (u32)jit_steps;
             i += jit_steps - 1;
             goto check_irqs;
         }
