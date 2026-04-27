@@ -47,3 +47,7 @@ add_test(NAME tt_eth_replay COMMAND test_tt_eth_replay)
 add_executable(test_jit_abi test_jit_abi.c)
 target_link_libraries(test_jit_abi PRIVATE cortex_m_core)
 add_test(NAME jit_abi COMMAND test_jit_abi)
+
+add_executable(test_jit_ldr_str test_jit_ldr_str.c)
+target_link_libraries(test_jit_ldr_str PRIVATE cortex_m_core)
+add_test(NAME jit_ldr_str COMMAND test_jit_ldr_str)
