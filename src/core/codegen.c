@@ -407,20 +407,33 @@ static void and_rax_imm32(codegen_t* cg, u32 v) {
 static void bt_ecx(codegen_t* cg, u8 n) {
     emit_b(cg, 0x0F); emit_b(cg, 0xBA); emit_b(cg, 0xE1); emit_b(cg, n);
 }
-/* xor r10d, r10d; setc r10b  — zero r10 then capture carry (45 31 D2; 41 0F 92 C2) */
+/* setc r10b then movzx r10d, r10b  — capture CF without clobbering it.
+   xor r10d,r10d would clear CF before setc; use movzx instead to zero-extend.
+   setc r10b   (41 0F 92 C2): r10b = CF; does not modify CF.
+   movzx r10d, r10b  (45 0F B6 D2): zero-extend byte to dword; does not modify flags. */
 static void setc_r10d(codegen_t* cg) {
-    emit_b(cg, 0x45); emit_b(cg, 0x31); emit_b(cg, 0xD2);   /* xor r10d, r10d */
     emit_b(cg, 0x41); emit_b(cg, 0x0F); emit_b(cg, 0x92); emit_b(cg, 0xC2); /* setc r10b */
+    emit_b(cg, 0x45); emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD2); /* movzx r10d,r10b */
 }
 /* or rax, r10  (4C 09 D0): REX.W+REX.R, mod=11 reg=r10 rm=rax */
 static void or_rax_r10(codegen_t* cg) {
     emit_b(cg, 0x4C); emit_b(cg, 0x09); emit_b(cg, 0xD0);
 }
+/* setnc r10b; movzx r10d, r10b  — capture NOT(CF) without clobbering flags.
+   setnc r10b  (41 0F 93 C2): r10b = !CF.
+   movzx r10d, r10b  (45 0F B6 D2): zero-extend; does not modify flags. */
+static void setnc_r10d(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x0F); emit_b(cg, 0x93); emit_b(cg, 0xC2); /* setnc r10b */
+    emit_b(cg, 0x45); emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD2); /* movzx r10d,r10b */
+}
 
 /* Reconstruct x86 EFLAGS from cpu->apsr NZCV.
    Strategy: pushfq into rax, clear SF/ZF/CF/OF bits, OR in apsr-derived bits, popfq.
    EFLAGS bit positions: CF=0, ZF=6, SF=7, OF=11.  Clear mask 0x08C1; sign-ext 0xFFFFF73E.
-   APSR: N=bit31 -> SF, Z=bit30 -> ZF, C=bit29 -> CF, V=bit28 -> OF. */
+   APSR: N=bit31 -> SF, Z=bit30 -> ZF, V=bit28 -> OF (direct map).
+   APSR.C (bit29): ARM C=1 means no-borrow; x86 CF=0 means no-borrow. INVERT: x86.CF = !ARM.C.
+   The jcc table (CS->jae=CF=0, CC->jb=CF=1, HI->ja=CF=0&&ZF=0, LS->jbe) is consistent
+   with this inversion. */
 static void emit_apsr_to_eflags(codegen_t* cg) {
     ld_ecx_apsr(cg);          /* ecx = cpu->apsr */
     emit_pushfq(cg);          /* rsp -= 8; [rsp] = EFLAGS */
@@ -428,15 +441,15 @@ static void emit_apsr_to_eflags(codegen_t* cg) {
     /* clear SF(7), ZF(6), CF(0), OF(11): and rax, ~0x08C1 = 0xFFFFF73E sign-extended */
     and_rax_imm32(cg, 0xFFFFF73Eu);
     /* N -> SF (bit 7) */
-    bt_ecx(cg, 31u); setc_r10d(cg); shl_r10d(cg, 7u);  or_rax_r10(cg);
+    bt_ecx(cg, 31u); setc_r10d(cg);  shl_r10d(cg, 7u);  or_rax_r10(cg);
     /* Z -> ZF (bit 6) */
-    bt_ecx(cg, 30u); setc_r10d(cg); shl_r10d(cg, 6u);  or_rax_r10(cg);
-    /* C -> CF (bit 0); no shift */
-    bt_ecx(cg, 29u); setc_r10d(cg);                     or_rax_r10(cg);
+    bt_ecx(cg, 30u); setc_r10d(cg);  shl_r10d(cg, 6u);  or_rax_r10(cg);
+    /* ARM.C -> CF: ARM C=1=no-borrow; x86 CF=0=no-borrow; store NOT(ARM.C) into bit0 of rax */
+    bt_ecx(cg, 29u); setnc_r10d(cg);                     or_rax_r10(cg);
     /* V -> OF (bit 11) */
-    bt_ecx(cg, 28u); setc_r10d(cg); shl_r10d(cg, 11u); or_rax_r10(cg);
+    bt_ecx(cg, 28u); setc_r10d(cg);  shl_r10d(cg, 11u); or_rax_r10(cg);
     emit_push_rax(cg);        /* [rsp] = rebuilt EFLAGS */
-    emit_popfq(cg);           /* restore EFLAGS from rax; any jcc after this reads NZCV */
+    emit_popfq(cg);           /* restore EFLAGS; jcc after this reads correct NZCV */
 }
 
 /* ARM cond -> x86 jcc near rel32 opcode (2nd byte after 0F prefix).
