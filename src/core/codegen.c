@@ -384,6 +384,125 @@ static void emit_store(codegen_t* cg, u8 rd, u8 rn, u32 imm, u32 sz) {
     or_bl_1(cg);
 }
 
+/* ---- branch emission helpers ---- */
+
+/* mov ecx, [r15 + CG_APSR_OFF]  (41 8B 8F disp32) */
+static void ld_ecx_apsr(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x8B); emit_b(cg, 0x8F);
+    emit_w32(cg, CG_APSR_OFF);
+}
+/* pushfq (9C) */
+static void emit_pushfq(codegen_t* cg) { emit_b(cg, 0x9C); }
+/* popfq (9D) */
+static void emit_popfq(codegen_t* cg)  { emit_b(cg, 0x9D); }
+/* push rax (50) */
+static void emit_push_rax(codegen_t* cg) { emit_b(cg, 0x50); }
+/* pop rax (58) */
+static void emit_pop_rax(codegen_t* cg)  { emit_b(cg, 0x58); }
+/* and rax, sign_ext_imm32  (48 25 imm32) */
+static void and_rax_imm32(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x48); emit_b(cg, 0x25); emit_w32(cg, v);
+}
+/* bt ecx, imm8  (0F BA E1 imm8) */
+static void bt_ecx(codegen_t* cg, u8 n) {
+    emit_b(cg, 0x0F); emit_b(cg, 0xBA); emit_b(cg, 0xE1); emit_b(cg, n);
+}
+/* xor r10d, r10d; setc r10b  — zero r10 then capture carry (45 31 D2; 41 0F 92 C2) */
+static void setc_r10d(codegen_t* cg) {
+    emit_b(cg, 0x45); emit_b(cg, 0x31); emit_b(cg, 0xD2);   /* xor r10d, r10d */
+    emit_b(cg, 0x41); emit_b(cg, 0x0F); emit_b(cg, 0x92); emit_b(cg, 0xC2); /* setc r10b */
+}
+/* or rax, r10  (4C 09 D0): REX.W+REX.R, mod=11 reg=r10 rm=rax */
+static void or_rax_r10(codegen_t* cg) {
+    emit_b(cg, 0x4C); emit_b(cg, 0x09); emit_b(cg, 0xD0);
+}
+
+/* Reconstruct x86 EFLAGS from cpu->apsr NZCV.
+   Strategy: pushfq into rax, clear SF/ZF/CF/OF bits, OR in apsr-derived bits, popfq.
+   EFLAGS bit positions: CF=0, ZF=6, SF=7, OF=11.  Clear mask 0x08C1; sign-ext 0xFFFFF73E.
+   APSR: N=bit31 -> SF, Z=bit30 -> ZF, C=bit29 -> CF, V=bit28 -> OF. */
+static void emit_apsr_to_eflags(codegen_t* cg) {
+    ld_ecx_apsr(cg);          /* ecx = cpu->apsr */
+    emit_pushfq(cg);          /* rsp -= 8; [rsp] = EFLAGS */
+    emit_pop_rax(cg);         /* rax = EFLAGS; rsp += 8 */
+    /* clear SF(7), ZF(6), CF(0), OF(11): and rax, ~0x08C1 = 0xFFFFF73E sign-extended */
+    and_rax_imm32(cg, 0xFFFFF73Eu);
+    /* N -> SF (bit 7) */
+    bt_ecx(cg, 31u); setc_r10d(cg); shl_r10d(cg, 7u);  or_rax_r10(cg);
+    /* Z -> ZF (bit 6) */
+    bt_ecx(cg, 30u); setc_r10d(cg); shl_r10d(cg, 6u);  or_rax_r10(cg);
+    /* C -> CF (bit 0); no shift */
+    bt_ecx(cg, 29u); setc_r10d(cg);                     or_rax_r10(cg);
+    /* V -> OF (bit 11) */
+    bt_ecx(cg, 28u); setc_r10d(cg); shl_r10d(cg, 11u); or_rax_r10(cg);
+    emit_push_rax(cg);        /* [rsp] = rebuilt EFLAGS */
+    emit_popfq(cg);           /* restore EFLAGS from rax; any jcc after this reads NZCV */
+}
+
+/* ARM cond -> x86 jcc near rel32 opcode (2nd byte after 0F prefix).
+   EQ=74, NE=75, CS=73(jae), CC=72(jb), MI=78, PL=79, VS=70, VC=71,
+   HI=77(ja), LS=76(jbe), GE=7D, LT=7C, GT=7F, LE=7E. */
+static u8 cond_to_jcc(u8 cond) {
+    switch (cond) {
+        case 0x0: return 0x84;  /* je  (EQ: ZF=1) */
+        case 0x1: return 0x85;  /* jne (NE: ZF=0) */
+        case 0x2: return 0x83;  /* jae (CS/HS: CF=0 = no borrow) */
+        case 0x3: return 0x82;  /* jb  (CC/LO: CF=1) */
+        case 0x4: return 0x88;  /* js  (MI: SF=1) */
+        case 0x5: return 0x89;  /* jns (PL: SF=0) */
+        case 0x6: return 0x80;  /* jo  (VS: OF=1) */
+        case 0x7: return 0x81;  /* jno (VC: OF=0) */
+        case 0x8: return 0x87;  /* ja  (HI: CF=0 && ZF=0) */
+        case 0x9: return 0x86;  /* jbe (LS: CF=1 || ZF=1) */
+        case 0xA: return 0x8D;  /* jge (GE: SF=OF) */
+        case 0xB: return 0x8C;  /* jl  (LT: SF!=OF) */
+        case 0xC: return 0x8F;  /* jg  (GT: ZF=0 && SF=OF) */
+        case 0xD: return 0x8E;  /* jle (LE: ZF=1 || SF!=OF) */
+        default:  return 0x00;
+    }
+}
+
+/* Emit B<cond> #imm as block terminator.
+   PRECONDITION: i->imm is signed byte offset already pre-shifted by decoder (imm8<<1 for T1,
+   imm21<<1 for T32). Formula: target_pc = i->pc + 4 + i->imm. Fallthrough: i->pc + i->size.
+   Layout: apsr_to_eflags; jcc rel32(13); st_pc(fall [11B]); jmp short(11); st_pc(taken [11B]). */
+static void emit_b_cond(codegen_t* cg, const insn_t* i) {
+    if (i->cond == 0xE) { /* AL: always taken */
+        st_pc(cg, i->pc + 4u + i->imm); return;
+    }
+    if (i->cond == 0xF) { /* NV: never taken */
+        st_pc(cg, i->pc + i->size); return;
+    }
+
+    u32 tgt = i->pc + 4u + i->imm;
+    u32 fal = i->pc + i->size;
+
+    emit_apsr_to_eflags(cg);
+
+    /* jcc rel32: 0F 8X disp32. disp32=13: skip 11B(fall st_pc) + 2B(jmp short) = land at taken. */
+    emit_b(cg, 0x0F);
+    emit_b(cg, cond_to_jcc(i->cond));
+    emit_w32(cg, 13u);
+
+    st_pc(cg, fal);     /* 11B: fallthrough store */
+    jmp_short(cg, 11u); /* 2B: skip taken store */
+    st_pc(cg, tgt);     /* 11B: taken store */
+}
+
+/* Emit B #imm (unconditional): PC = pc+4+imm. Block terminates. */
+static void emit_b_uncond(codegen_t* cg, const insn_t* i) {
+    st_pc(cg, i->pc + 4u + i->imm);
+}
+
+/* Emit T32 BL: LR = (pc+size)|1; PC = (pc+4+imm)&~1. Block terminates. */
+static void emit_t32_bl(codegen_t* cg, const insn_t* i) {
+    u32 tgt = (i->pc + 4u + i->imm) & ~1u;
+    u32 lnk = (i->pc + i->size) | 1u;
+    mov_eax_imm(cg, lnk);
+    st_eax(cg, REG_LR);
+    st_pc(cg, tgt);
+}
+
 /* op -> x86 emit. */
 bool codegen_supports(opcode_t op) {
     switch (op) {
@@ -419,6 +538,10 @@ bool codegen_supports(opcode_t op) {
         case OP_T32_LDR_LIT:
         case OP_T32_LDR_REG:   case OP_T32_STR_REG:
         case OP_T32_LDRD_IMM:  case OP_T32_STRD_IMM:
+        /* branch terminators */
+        case OP_B_COND:  case OP_T32_B_COND:
+        case OP_B_UNCOND:
+        case OP_T32_BL:
             return true;
         default:
             return false;
@@ -636,6 +759,14 @@ static void emit_op(codegen_t* cg, const insn_t* i) {
             emit_store(cg, i->rs, i->rn, i->imm + 4u, 4u);
             break;
 
+        /* branch terminators */
+        case OP_B_UNCOND:
+            emit_b_uncond(cg, i); break;
+        case OP_B_COND: case OP_T32_B_COND:
+            emit_b_cond(cg, i); break;
+        case OP_T32_BL:
+            emit_t32_bl(cg, i); break;
+
         default: break;
     }
 }
@@ -673,8 +804,14 @@ cg_thunk_t codegen_emit(codegen_t* cg, const insn_t* ins, u8 n) {
     emit_prologue(cg);
     emit_clear_fail(cg);                /* xor ebx,ebx — failure flag */
     for (u8 k = 0; k < n; ++k) emit_op(cg, &ins[k]);
-    u32 last = ins[n - 1].pc + ins[n - 1].size;
-    st_pc(cg, last);
+    /* branch terminators already wrote PC via emit_b_cond/uncond/bl; skip trailing store */
+    opcode_t last_op = ins[n - 1].op;
+    bool wrote_pc = (last_op == OP_B_COND    || last_op == OP_T32_B_COND ||
+                     last_op == OP_B_UNCOND  || last_op == OP_T32_BL);
+    if (!wrote_pc) {
+        u32 last = ins[n - 1].pc + ins[n - 1].size;
+        st_pc(cg, last);
+    }
     emit_epilogue_check(cg);            /* bl-check: halt-or-success */
     return (cg_thunk_t)start;
 }
