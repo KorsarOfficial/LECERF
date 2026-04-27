@@ -39,3 +39,7 @@ target_link_libraries(test_tt_firmware PRIVATE cortex_m_core)
 target_compile_definitions(test_tt_firmware PRIVATE
     FIRMWARE_BIN_PATH="${CMAKE_SOURCE_DIR}/firmware/test_tt/test_tt.bin")
 add_test(NAME tt_firmware COMMAND test_tt_firmware)
+
+add_executable(test_tt_eth_replay test_tt_eth_replay.c)
+target_link_libraries(test_tt_eth_replay PRIVATE cortex_m_core)
+add_test(NAME tt_eth_replay COMMAND test_tt_eth_replay)
