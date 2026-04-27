@@ -33,7 +33,7 @@ TEST(ldr_str_roundtrip) {
     insn_t str; memset(&str, 0, sizeof str);
     str.op = OP_STR_IMM; str.rd = 0u; str.rn = 2u; str.imm = 0u;
     str.pc = 0u; str.size = 2u;
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &str, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &str, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&g_cpu, &g_bus));
 
@@ -49,7 +49,7 @@ TEST(ldr_str_roundtrip) {
     insn_t ldr; memset(&ldr, 0, sizeof ldr);
     ldr.op = OP_LDR_IMM; ldr.rd = 1u; ldr.rn = 2u; ldr.imm = 0u;
     ldr.pc = 2u; ldr.size = 2u;
-    cg_thunk_t fn2 = codegen_emit(&s_jit.cg, &ldr, 1u);
+    cg_thunk_t fn2 = codegen_emit(&s_jit.cg, &g_bus, &ldr, 1u);
     ASSERT_TRUE(fn2 != NULL);
     ASSERT_TRUE(fn2(&g_cpu, &g_bus));
     ASSERT_EQ_U32(g_cpu.r[1], 0x12345678u);
@@ -67,7 +67,7 @@ TEST(ldrb_zero_extend) {
     insn_t ldrb; memset(&ldrb, 0, sizeof ldrb);
     ldrb.op = OP_LDRB_IMM; ldrb.rd = 3u; ldrb.rn = 2u; ldrb.imm = 0u;
     ldrb.pc = 0u; ldrb.size = 2u;
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &ldrb, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &ldrb, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&g_cpu, &g_bus));
     ASSERT_EQ_U32(g_cpu.r[3], 0x000000FFu);
@@ -86,7 +86,7 @@ TEST(ldrh_zero_extend) {
     insn_t ldrh; memset(&ldrh, 0, sizeof ldrh);
     ldrh.op = OP_LDRH_IMM; ldrh.rd = 4u; ldrh.rn = 2u; ldrh.imm = 0u;
     ldrh.pc = 0u; ldrh.size = 2u;
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &ldrh, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &ldrh, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&g_cpu, &g_bus));
     ASSERT_EQ_U32(g_cpu.r[4], 0x0000CAFEu);
@@ -103,7 +103,7 @@ TEST(t32_ldr_imm) {
     insn_t str; memset(&str, 0, sizeof str);
     str.op = OP_STR_IMM; str.rd = 0u; str.rn = 2u; str.imm = 0u;
     str.pc = 0u; str.size = 2u;
-    cg_thunk_t sf = codegen_emit(&s_jit.cg, &str, 1u);
+    cg_thunk_t sf = codegen_emit(&s_jit.cg, &g_bus, &str, 1u);
     ASSERT_TRUE(sf != NULL);
     ASSERT_TRUE(sf(&g_cpu, &g_bus));
 
@@ -112,7 +112,7 @@ TEST(t32_ldr_imm) {
     t32.op = OP_T32_LDR_IMM; t32.rd = 5u; t32.rn = 2u; t32.imm = 0u;
     t32.pc = 2u; t32.size = 4u;
     t32.add = true; t32.index = true; t32.writeback = false; /* T3 simple offset */
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &t32, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &t32, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&g_cpu, &g_bus));
     ASSERT_EQ_U32(g_cpu.r[5], 0xDEADBEEFu);
@@ -128,7 +128,7 @@ TEST(ldr_fault_path) {
     insn_t bad; memset(&bad, 0, sizeof bad);
     bad.op = OP_LDR_IMM; bad.rd = 6u; bad.rn = 2u; bad.imm = 0u;
     bad.pc = 0u; bad.size = 2u;
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bad, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &bad, 1u);
     ASSERT_TRUE(fn != NULL);
     bool ok = fn(&g_cpu, &g_bus);
     ASSERT_TRUE(!ok);             /* thunk must return false */

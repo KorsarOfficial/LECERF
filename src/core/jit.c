@@ -54,7 +54,7 @@ static jit_block_t* compile_block(jit_t* j, bus_t* b, u32 pc) {
     }
     bk->pc_end = cur;
     /* Try native codegen for whole block. */
-    bk->native = codegen_emit(&j->cg, bk->ins, bk->n_ins);
+    bk->native = codegen_emit(&j->cg, b, bk->ins, bk->n_ins);
     install(j, pc, (int)j->n_blocks);
     j->n_blocks++;
     return bk;

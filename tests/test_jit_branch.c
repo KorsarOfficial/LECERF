@@ -61,7 +61,7 @@ static void run_branch(u32 a, u32 b, u8 cond, u32 imm, const char* tag) {
 
     memset(&s_jit, 0, sizeof s_jit);
     jit_init(&s_jit);
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, pair, 2u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bus, pair, 2u);
 
     _g_tests++;
     if (!fn) { fprintf(stderr, "FAIL %s: codegen_emit returned NULL\n", tag); _g_fail++; return; }
@@ -169,7 +169,7 @@ TEST(branch_uncond) {
     insn_t b; memset(&b, 0, sizeof b);
     b.op = OP_B_UNCOND; b.imm = 0x20u; b.pc = 0u; b.size = 2u;
     memset(&s_jit, 0, sizeof s_jit); jit_init(&s_jit);
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &b, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bus, &b, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&c, &bus));
     ASSERT_EQ_U32(c.r[REG_PC], 0u + 4u + 0x20u);
@@ -184,7 +184,7 @@ TEST(branch_bl) {
     insn_t bl; memset(&bl, 0, sizeof bl);
     bl.op = OP_T32_BL; bl.imm = 0x40u; bl.pc = 0x100u; bl.size = 4u;
     memset(&s_jit, 0, sizeof s_jit); jit_init(&s_jit);
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bl, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bus, &bl, 1u);
     ASSERT_TRUE(fn != NULL);
     ASSERT_TRUE(fn(&c, &bus));
     ASSERT_EQ_U32(c.r[REG_LR], (0x100u + 4u) | 1u);

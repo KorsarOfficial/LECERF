@@ -30,7 +30,7 @@ typedef bool (*cg_thunk_t)(cpu_t* c, bus_t* b);
 
 bool codegen_init(codegen_t* cg);
 void codegen_free(codegen_t* cg);
-cg_thunk_t codegen_emit(codegen_t* cg, const insn_t* ins, u8 n);
+cg_thunk_t codegen_emit(codegen_t* cg, bus_t* b, const insn_t* ins, u8 n);
 bool codegen_supports(opcode_t op);
 
 #endif

@@ -15,7 +15,6 @@
 static void emit_b(codegen_t* cg, u8 b) {
     if (cg->used < cg->capacity) cg->buffer[cg->used++] = b;
 }
-static void emit_w16(codegen_t* cg, u16 v) { emit_b(cg, (u8)v); emit_b(cg, (u8)(v >> 8)); }
 static void emit_w32(codegen_t* cg, u32 v) {
     emit_b(cg, (u8)v); emit_b(cg, (u8)(v >> 8));
     emit_b(cg, (u8)(v >> 16)); emit_b(cg, (u8)(v >> 24));
@@ -384,124 +383,6 @@ static void emit_store(codegen_t* cg, u8 rd, u8 rn, u32 imm, u32 sz) {
     or_bl_1(cg);
 }
 
-/* ---- branch emission helpers ---- */
-
-/* mov ecx, [r15 + CG_APSR_OFF]  (41 8B 8F disp32) */
-static void ld_ecx_apsr(codegen_t* cg) {
-    emit_b(cg, 0x41); emit_b(cg, 0x8B); emit_b(cg, 0x8F);
-    emit_w32(cg, CG_APSR_OFF);
-}
-/* pushfq (9C) */
-static void emit_pushfq(codegen_t* cg) { emit_b(cg, 0x9C); }
-/* popfq (9D) */
-static void emit_popfq(codegen_t* cg)  { emit_b(cg, 0x9D); }
-/* push rax (50) */
-static void emit_push_rax(codegen_t* cg) { emit_b(cg, 0x50); }
-/* pop rax (58) */
-static void emit_pop_rax(codegen_t* cg)  { emit_b(cg, 0x58); }
-/* and rax, sign_ext_imm32  (48 25 imm32) */
-static void and_rax_imm32(codegen_t* cg, u32 v) {
-    emit_b(cg, 0x48); emit_b(cg, 0x25); emit_w32(cg, v);
-}
-/* bt ecx, imm8  (0F BA E1 imm8) */
-static void bt_ecx(codegen_t* cg, u8 n) {
-    emit_b(cg, 0x0F); emit_b(cg, 0xBA); emit_b(cg, 0xE1); emit_b(cg, n);
-}
-/* setc r10b then movzx r10d, r10b  — capture CF without clobbering it.
-   xor r10d,r10d would clear CF before setc; use movzx instead to zero-extend.
-   setc r10b   (41 0F 92 C2): r10b = CF; does not modify CF.
-   movzx r10d, r10b  (45 0F B6 D2): zero-extend byte to dword; does not modify flags. */
-static void setc_r10d(codegen_t* cg) {
-    emit_b(cg, 0x41); emit_b(cg, 0x0F); emit_b(cg, 0x92); emit_b(cg, 0xC2); /* setc r10b */
-    emit_b(cg, 0x45); emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD2); /* movzx r10d,r10b */
-}
-/* or rax, r10  (4C 09 D0): REX.W+REX.R, mod=11 reg=r10 rm=rax */
-static void or_rax_r10(codegen_t* cg) {
-    emit_b(cg, 0x4C); emit_b(cg, 0x09); emit_b(cg, 0xD0);
-}
-/* setnc r10b; movzx r10d, r10b  — capture NOT(CF) without clobbering flags.
-   setnc r10b  (41 0F 93 C2): r10b = !CF.
-   movzx r10d, r10b  (45 0F B6 D2): zero-extend; does not modify flags. */
-static void setnc_r10d(codegen_t* cg) {
-    emit_b(cg, 0x41); emit_b(cg, 0x0F); emit_b(cg, 0x93); emit_b(cg, 0xC2); /* setnc r10b */
-    emit_b(cg, 0x45); emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD2); /* movzx r10d,r10b */
-}
-
-/* Reconstruct x86 EFLAGS from cpu->apsr NZCV.
-   Strategy: pushfq into rax, clear SF/ZF/CF/OF bits, OR in apsr-derived bits, popfq.
-   EFLAGS bit positions: CF=0, ZF=6, SF=7, OF=11.  Clear mask 0x08C1; sign-ext 0xFFFFF73E.
-   APSR: N=bit31 -> SF, Z=bit30 -> ZF, V=bit28 -> OF (direct map).
-   APSR.C (bit29): ARM C=1 means no-borrow; x86 CF=0 means no-borrow. INVERT: x86.CF = !ARM.C.
-   The jcc table (CS->jae=CF=0, CC->jb=CF=1, HI->ja=CF=0&&ZF=0, LS->jbe) is consistent
-   with this inversion. */
-static void emit_apsr_to_eflags(codegen_t* cg) {
-    ld_ecx_apsr(cg);          /* ecx = cpu->apsr */
-    emit_pushfq(cg);          /* rsp -= 8; [rsp] = EFLAGS */
-    emit_pop_rax(cg);         /* rax = EFLAGS; rsp += 8 */
-    /* clear SF(7), ZF(6), CF(0), OF(11): and rax, ~0x08C1 = 0xFFFFF73E sign-extended */
-    and_rax_imm32(cg, 0xFFFFF73Eu);
-    /* N -> SF (bit 7) */
-    bt_ecx(cg, 31u); setc_r10d(cg);  shl_r10d(cg, 7u);  or_rax_r10(cg);
-    /* Z -> ZF (bit 6) */
-    bt_ecx(cg, 30u); setc_r10d(cg);  shl_r10d(cg, 6u);  or_rax_r10(cg);
-    /* ARM.C -> CF: ARM C=1=no-borrow; x86 CF=0=no-borrow; store NOT(ARM.C) into bit0 of rax */
-    bt_ecx(cg, 29u); setnc_r10d(cg);                     or_rax_r10(cg);
-    /* V -> OF (bit 11) */
-    bt_ecx(cg, 28u); setc_r10d(cg);  shl_r10d(cg, 11u); or_rax_r10(cg);
-    emit_push_rax(cg);        /* [rsp] = rebuilt EFLAGS */
-    emit_popfq(cg);           /* restore EFLAGS; jcc after this reads correct NZCV */
-}
-
-/* ARM cond -> x86 jcc near rel32 opcode (2nd byte after 0F prefix).
-   EQ=74, NE=75, CS=73(jae), CC=72(jb), MI=78, PL=79, VS=70, VC=71,
-   HI=77(ja), LS=76(jbe), GE=7D, LT=7C, GT=7F, LE=7E. */
-static u8 cond_to_jcc(u8 cond) {
-    switch (cond) {
-        case 0x0: return 0x84;  /* je  (EQ: ZF=1) */
-        case 0x1: return 0x85;  /* jne (NE: ZF=0) */
-        case 0x2: return 0x83;  /* jae (CS/HS: CF=0 = no borrow) */
-        case 0x3: return 0x82;  /* jb  (CC/LO: CF=1) */
-        case 0x4: return 0x88;  /* js  (MI: SF=1) */
-        case 0x5: return 0x89;  /* jns (PL: SF=0) */
-        case 0x6: return 0x80;  /* jo  (VS: OF=1) */
-        case 0x7: return 0x81;  /* jno (VC: OF=0) */
-        case 0x8: return 0x87;  /* ja  (HI: CF=0 && ZF=0) */
-        case 0x9: return 0x86;  /* jbe (LS: CF=1 || ZF=1) */
-        case 0xA: return 0x8D;  /* jge (GE: SF=OF) */
-        case 0xB: return 0x8C;  /* jl  (LT: SF!=OF) */
-        case 0xC: return 0x8F;  /* jg  (GT: ZF=0 && SF=OF) */
-        case 0xD: return 0x8E;  /* jle (LE: ZF=1 || SF!=OF) */
-        default:  return 0x00;
-    }
-}
-
-/* Emit B<cond> #imm as block terminator.
-   PRECONDITION: i->imm is signed byte offset already pre-shifted by decoder (imm8<<1 for T1,
-   imm21<<1 for T32). Formula: target_pc = i->pc + 4 + i->imm. Fallthrough: i->pc + i->size.
-   Layout: apsr_to_eflags; jcc rel32(13); st_pc(fall [11B]); jmp short(11); st_pc(taken [11B]). */
-static void emit_b_cond(codegen_t* cg, const insn_t* i) {
-    if (i->cond == 0xE) { /* AL: always taken */
-        st_pc(cg, i->pc + 4u + i->imm); return;
-    }
-    if (i->cond == 0xF) { /* NV: never taken */
-        st_pc(cg, i->pc + i->size); return;
-    }
-
-    u32 tgt = i->pc + 4u + i->imm;
-    u32 fal = i->pc + i->size;
-
-    emit_apsr_to_eflags(cg);
-
-    /* jcc rel32: 0F 8X disp32. disp32=13: skip 11B(fall st_pc) + 2B(jmp short) = land at taken. */
-    emit_b(cg, 0x0F);
-    emit_b(cg, cond_to_jcc(i->cond));
-    emit_w32(cg, 13u);
-
-    st_pc(cg, fal);     /* 11B: fallthrough store */
-    jmp_short(cg, 11u); /* 2B: skip taken store */
-    st_pc(cg, tgt);     /* 11B: taken store */
-}
-
 /* Emit B #imm (unconditional): PC = pc+4+imm. Block terminates. */
 static void emit_b_uncond(codegen_t* cg, const insn_t* i) {
     st_pc(cg, i->pc + 4u + i->imm);
@@ -551,6 +432,11 @@ bool codegen_supports(opcode_t op) {
         case OP_T32_LDR_LIT:
         case OP_T32_LDR_REG:   case OP_T32_STR_REG:
         case OP_T32_LDRD_IMM:  case OP_T32_STRD_IMM:
+        /* stack / multi-reg */
+        case OP_PUSH:
+        case OP_POP:
+        case OP_T32_LDM:
+        case OP_T32_STM:
         /* branch terminators */
         case OP_B_COND:  case OP_T32_B_COND:
         case OP_B_UNCOND:
@@ -561,7 +447,607 @@ bool codegen_supports(opcode_t op) {
     }
 }
 
-static void emit_op(codegen_t* cg, const insn_t* i) {
+/* ---- PUSH/POP helpers ---- */
+
+/* cmp eax, imm32  (3D imm32) 5B */
+static void cmp_eax_imm32(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x3D); emit_w32(cg, v);
+}
+/* jcc rel8: opcode + signed byte offset (2B) */
+static void jcc_rel8(codegen_t* cg, u8 op, u8 off) {
+    emit_b(cg, op); emit_b(cg, off);
+}
+/* mov r10, imm64  (49 BA imm64)  10B */
+static void mov_r10_imm64(codegen_t* cg, u64 v) {
+    emit_b(cg, 0x49); emit_b(cg, 0xBA); emit_w64(cg, v);
+}
+/* mov r11d, eax zero-ext  (41 89 C3)  3B */
+static void mov_r11d_eax_zero_ext(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0xC3);
+}
+/* add r11, r10  (4D 01 D3)  3B */
+static void add_r11_r10(codegen_t* cg) {
+    emit_b(cg, 0x4D); emit_b(cg, 0x01); emit_b(cg, 0xD3);
+}
+/* sub r11, imm32  (49 81 EB imm32)  7B */
+static void sub_r11_imm32(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x49); emit_b(cg, 0x81); emit_b(cg, 0xEB); emit_w32(cg, v);
+}
+/* mov [r11 + disp32], ecx  (41 89 8B disp32)  7B */
+static void mov_r11_off_ecx(codegen_t* cg, u32 disp) {
+    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x8B); emit_w32(cg, disp);
+}
+/* mov ecx, [r11 + disp32]  (41 8B 0B+disp) -> ModRM=0x8B rm=r11 reg=ecx
+   Actually: 41 8B 8B disp32  (REX.B=1, mov ecx,[r11+disp32]) */
+static void mov_ecx_r11_off(codegen_t* cg, u32 disp) {
+    emit_b(cg, 0x41); emit_b(cg, 0x8B); emit_b(cg, 0x8B); emit_w32(cg, disp);
+}
+/* add edx, imm32  (81 C2 imm32)  6B */
+static void add_edx_imm(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x81); emit_b(cg, 0xC2); emit_w32(cg, v);
+}
+/* cmp ecx, imm32  (81 F9 imm32)  6B */
+static void cmp_ecx_imm32(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x81); emit_b(cg, 0xF9); emit_w32(cg, v);
+}
+/* and ecx, imm32  (81 E1 imm32)  6B */
+static void and_ecx_imm32(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x81); emit_b(cg, 0xE1); emit_w32(cg, v);
+}
+/* OP_PUSH T1 native emitter */
+static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
+    u32 cnt = 0;
+    for (int k = 0; k <= 14; k++) if (reg_list & (1u << k)) cnt++;
+    if (cnt == 0) return;
+
+    ld_eax(cg, REG_SP);
+    sub_imm(cg, cnt * 4u);
+    st_eax(cg, REG_SP);
+
+    region_t* sram = b ? bus_find_flat(b, 0x20000000u) : NULL;
+    if (sram && sram->buf) {
+        u32 fbase = sram->base;
+        u32 fsize = sram->size;
+        /* fast body: r10_imm64(10) + r11d_eax(3) + add(3) + sub(7) = 23B setup
+           + cnt*(ld_ecx(7) + store(7)) = cnt*14B */
+        u32 fast_body = 23u + cnt * 14u;
+        /* slow body: ld_eax(7) + cnt*(sub_rsp(4)+mov_rcx(3)+mov_edx(2)+[add_edx(6)?]+mov_r8d(6)+mov_r9d(7)+mov_rax(10)+call(2)+add_rsp(4)+test(4)+or(3)) */
+        /* jmp_short to skip slow: 2B */
+        u32 slow_body = 7u + cnt * (4u+3u+2u+6u+6u+7u+10u+2u+4u+4u+3u);
+        /* jb rel8 from end of jb instr: skip past (5+2) + fast_body + 2 = fast_body+9 bytes
+           to reach slow path. But rel8 is signed; max 127. If too large, use long jmp. */
+        /* Offset from end of jb(2B) instruction = 5(second_cmp) + 2(ja) + fast_body + 2(jmp_short) */
+        u32 jb_target = 5u + 2u + fast_body + 2u;   /* to start of slow */
+        u32 ja_target = fast_body + 2u;              /* from end of ja to start of slow */
+        (void)slow_body;
+        if (jb_target > 127u || ja_target > 127u) {
+            /* bounds too large for rel8; skip fast path entirely */
+            goto slow_only_push;
+        }
+
+        u32 hi = fbase + fsize - cnt * 4u;
+        cmp_eax_imm32(cg, fbase);
+        jcc_rel8(cg, 0x72, (u8)jb_target);
+        cmp_eax_imm32(cg, hi);
+        jcc_rel8(cg, 0x77, (u8)ja_target);
+
+        /* fast path */
+        mov_r10_imm64(cg, (u64)(uintptr_t)sram->buf);
+        mov_r11d_eax_zero_ext(cg);
+        add_r11_r10(cg);
+        sub_r11_imm32(cg, fbase);
+        u32 k_off = 0;
+        for (int k = 0; k <= 14; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            if (k == 14) ld_ecx(cg, REG_LR);
+            else         ld_ecx(cg, (u8)k);
+            mov_r11_off_ecx(cg, k_off);
+            k_off += 4u;
+        }
+        /* jmp_short over slow; slow_body is variable. Compute actual slow body size:
+           ld_eax(7) + per-reg size. For bus_write with add_edx: first reg has no add_edx,
+           the rest do. */
+        {
+            u32 sb = 7u; /* ld_eax */
+            for (int k = 0, ki = 0; k <= 14; k++) {
+                if (!(reg_list & (1u << k))) continue;
+                sb += 4u+3u+2u+6u+7u+10u+2u+4u+4u+3u;  /* always add_edx(6) for simplicity */
+                ki++;
+            }
+            jmp_short(cg, (u8)sb);
+        }
+
+        /* slow path */
+        ld_eax(cg, REG_SP);
+        k_off = 0;
+        for (int k = 0; k <= 14; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            sub_rsp_16(cg);
+            mov_rcx_r14(cg);
+            mov_edx_eax(cg);
+            add_edx_imm(cg, k_off);
+            mov_r8d_imm(cg, 4u);
+            if (k == 14) mov_r9d_reg(cg, REG_LR);
+            else         mov_r9d_reg(cg, (u8)k);
+            mov_rax_imm64(cg, (u64)(uintptr_t)bus_write);
+            call_rax(cg);
+            add_rsp_16(cg);
+            test_al_jnz(cg, 3u);
+            or_bl_1(cg);
+            k_off += 4u;
+        }
+        return;
+    }
+
+slow_only_push:;
+    /* slow path only */
+    ld_eax(cg, REG_SP);
+    u32 k_off = 0;
+    for (int k = 0; k <= 14; k++) {
+        if (!(reg_list & (1u << k))) continue;
+        sub_rsp_16(cg);
+        mov_rcx_r14(cg);
+        mov_edx_eax(cg);
+        add_edx_imm(cg, k_off);
+        mov_r8d_imm(cg, 4u);
+        if (k == 14) mov_r9d_reg(cg, REG_LR);
+        else         mov_r9d_reg(cg, (u8)k);
+        mov_rax_imm64(cg, (u64)(uintptr_t)bus_write);
+        call_rax(cg);
+        add_rsp_16(cg);
+        test_al_jnz(cg, 3u);
+        or_bl_1(cg);
+        k_off += 4u;
+    }
+}
+
+/* Emit POP (OP_POP T1): reg_list bits 0..7=R0..R7 bit15=PC.
+   ARM: load from sp ascending, then sp += cnt*4.
+   PC special: mask &~1, check EXC_RETURN (top byte 0xFF -> bl fallback), else store to CG_PC_OFF. */
+static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
+    u32 cnt = 0;
+    for (int k = 0; k <= 15; k++) if (reg_list & (1u << k)) cnt++;
+    if (cnt == 0) return;
+    bool has_pc = (reg_list & (1u << 15)) != 0;
+
+    /* load current SP */
+    ld_eax(cg, REG_SP);   /* eax = sp_old */
+
+    region_t* sram = b ? bus_find_flat(b, 0x20000000u) : NULL;
+    if (sram && sram->buf) {
+        u32 fbase = sram->base;
+        u32 fsize = sram->size;
+        /* fast body: r10(10)+r11d(3)+add(3)+sub(7)=23 setup
+           + cnt*(load_from_r11(7) + store_to_reg_or_pc(7)) (excl PC cmp) */
+        u32 fast_cnt = cnt; /* inc PC if present */
+        u32 fast_body = 23u + fast_cnt * 14u;
+        if (has_pc) fast_body += 6u + 2u + 3u + 7u;  /* cmp(6)+jae(2)+and(6)+st_pc(11) extra for PC */
+        u32 ja_target  = fast_body + 2u;             /* from end of ja(2) to slow */
+        u32 jb_target  = 5u + 2u + fast_body + 2u;  /* from end of jb(2) */
+        if (jb_target > 127u || ja_target > 127u) goto slow_only_pop;
+
+        u32 hi = fbase + fsize - cnt * 4u;
+        cmp_eax_imm32(cg, fbase);
+        jcc_rel8(cg, 0x72, (u8)jb_target);
+        cmp_eax_imm32(cg, hi);
+        jcc_rel8(cg, 0x77, (u8)ja_target);
+
+        /* fast: r10=buf, r11=buf+(eax-fbase) */
+        mov_r10_imm64(cg, (u64)(uintptr_t)sram->buf);
+        mov_r11d_eax_zero_ext(cg);
+        add_r11_r10(cg);
+        sub_r11_imm32(cg, fbase);
+
+        u32 k_off = 0;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            mov_ecx_r11_off(cg, k_off);   /* ecx = [r11 + k_off] = mem[sp + k_off] */
+            if (k == 15) {
+                /* PC: check EXC_RETURN, mask bit0, store */
+                cmp_ecx_imm32(cg, 0xFFFFFFF0u);
+                /* jae +N: or bl,1 (3B) */
+                jcc_rel8(cg, 0x73, 3u);   /* jae -> fallback */
+                /* not EXC_RETURN: and ecx, ~1 then store PC */
+                and_ecx_imm32(cg, ~1u);
+                /* store to [r15+CG_PC_OFF] via ecx */
+                emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x8F);
+                emit_w32(cg, CG_PC_OFF);
+            } else {
+                st_ecx(cg, (u8)k);
+            }
+            k_off += 4u;
+        }
+        /* SP += cnt*4 */
+        ld_eax(cg, REG_SP);
+        add_imm(cg, cnt * 4u);
+        st_eax(cg, REG_SP);
+
+        /* compute slow body size for jmp_short */
+        {
+            /* each bus_read: sub(4)+rcx(3)+edx(2)+add_edx(6)+r8d(6)+lea_r9(4)+rax(10)+call(2)+ecx_rsp(3)+add_rsp(4)+test(4)+or(3)+jmp(2)+store(7) = 60B */
+            u32 sb = 7u; /* ld_eax(SP) for slow path */
+            for (int k = 0; k <= 15; k++) {
+                if (!(reg_list & (1u << k))) continue;
+                sb += 60u;
+                if (k == 15) sb += 3u; /* mov r10d, ecx instead of st_ecx(7) is 3B; delta = -4 */
+            }
+            sb += 7u + 5u + 7u; /* SP update: ld_eax(7)+add_imm(5)+st_eax(7) */
+            if (has_pc) sb += 9u + 2u + 9u + 9u; /* cmp+jae+and+store r10d */
+            jmp_short(cg, (u8)sb);
+        }
+        /* slow path (reached via bounds-check fallthrough only): */
+        ld_eax(cg, REG_SP);
+        {
+            u32 sl_off = 0;
+            for (int k = 0; k <= 15; k++) {
+                if (!(reg_list & (1u << k))) continue;
+                sub_rsp_16(cg);
+                mov_rcx_r14(cg);
+                mov_edx_eax(cg);
+                add_edx_imm(cg, sl_off);
+                mov_r8d_imm(cg, 4u);
+                lea_r9_rsp0(cg);
+                mov_rax_imm64(cg, (u64)(uintptr_t)bus_read);
+                call_rax(cg);
+                mov_ecx_rsp0(cg);
+                add_rsp_16(cg);
+                test_al_jnz(cg, 5u);
+                or_bl_1(cg);
+                jmp_short(cg, 7u);
+                if (k == 15) {
+                    emit_b(cg, 0x44); emit_b(cg, 0x89); emit_b(cg, 0xC8); /* mov r10d, ecx */
+                } else {
+                    st_ecx(cg, (u8)k);
+                }
+                sl_off += 4u;
+            }
+        }
+        ld_eax(cg, REG_SP);
+        add_imm(cg, cnt * 4u);
+        st_eax(cg, REG_SP);
+        if (has_pc) {
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
+            jcc_rel8(cg, 0x73, 9u);
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+        }
+        return;
+    }
+
+slow_only_pop:;
+    /* slow path only (no flat SRAM or bounds overflow) */
+    {
+        ld_eax(cg, REG_SP);
+        u32 sp_off = 0;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            sub_rsp_16(cg);
+            mov_rcx_r14(cg);
+            mov_edx_eax(cg);
+            add_edx_imm(cg, sp_off);
+            mov_r8d_imm(cg, 4u);
+            lea_r9_rsp0(cg);
+            mov_rax_imm64(cg, (u64)(uintptr_t)bus_read);
+            call_rax(cg);
+            mov_ecx_rsp0(cg);
+            add_rsp_16(cg);
+            test_al_jnz(cg, 5u);
+            or_bl_1(cg);
+            jmp_short(cg, 7u);
+            if (k == 15) {
+                emit_b(cg, 0x44); emit_b(cg, 0x89); emit_b(cg, 0xC8); /* mov r10d, ecx */
+            } else {
+                st_ecx(cg, (u8)k);
+            }
+            sp_off += 4u;
+        }
+        ld_eax(cg, REG_SP);
+        add_imm(cg, cnt * 4u);
+        st_eax(cg, REG_SP);
+        if (has_pc) {
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
+            jcc_rel8(cg, 0x73, 9u);
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+        }
+    }
+}
+
+/* Emit T32 LDM/STM: IA or DB, with optional writeback, 16-bit reg_list.
+   is_load: true=LDM, false=STM; is_db: true=DecrementBefore; writeback: update rn. */
+static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
+                          bool is_load, bool is_db, bool writeback, u32 insn_pc) {
+    u32 cnt = 0;
+    for (int k = 0; k <= 15; k++) if (reg_list & (1u << k)) cnt++;
+    if (cnt == 0) return;
+    bool has_pc = is_load && (reg_list & (1u << 15));
+
+    /* eax = base = c->r[rn] */
+    ld_eax(cg, rn);
+    /* if DB: eax -= cnt*4 (compute start address) */
+    if (is_db) sub_imm(cg, cnt * 4u);
+    /* eax = start address for all accesses */
+
+    region_t* sram = b ? bus_find_flat(b, 0x20000000u) : NULL;
+    if (sram && sram->buf) {
+        u32 fbase = sram->base;
+        u32 fsize = sram->size;
+        /* PC handling adds extra bytes; conservatively add 20 */
+        u32 fast_body = 23u + cnt * 14u + (has_pc ? 20u : 0u) + (writeback ? 14u : 0u);
+        u32 ja_target = fast_body + 2u;
+        u32 jb_target = 5u + 2u + fast_body + 2u;
+        if (jb_target > 127u || ja_target > 127u) goto slow_only_ldm;
+
+        u32 hi = fbase + fsize - cnt * 4u;
+        cmp_eax_imm32(cg, fbase);
+        jcc_rel8(cg, 0x72, (u8)jb_target);
+        cmp_eax_imm32(cg, hi);
+        jcc_rel8(cg, 0x77, (u8)ja_target);
+
+        /* fast: r11 = buf + (eax - fbase) */
+        mov_r10_imm64(cg, (u64)(uintptr_t)sram->buf);
+        mov_r11d_eax_zero_ext(cg);
+        add_r11_r10(cg);
+        sub_r11_imm32(cg, fbase);
+
+        u32 k_off = 0;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            if (is_load) {
+                mov_ecx_r11_off(cg, k_off);
+                if (k == 15) {
+                    /* store PC with EXC_RETURN check */
+                    cmp_ecx_imm32(cg, 0xFFFFFFF0u);
+                    jcc_rel8(cg, 0x73, 3u);
+                    and_ecx_imm32(cg, ~1u);
+                    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x8F);
+                    emit_w32(cg, CG_PC_OFF);
+                } else {
+                    st_ecx(cg, (u8)k);
+                }
+            } else {
+                /* STM */
+                if (k == 15) {
+                    /* STM with PC: store compile-time insn_pc+4 */
+                    mov_eax_imm(cg, insn_pc + 4u);
+                    /* mov [r11+k_off], eax */
+                    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x83); emit_w32(cg, k_off);
+                    ld_eax(cg, rn);   /* restore eax=base after mov_eax_imm clobbered it */
+                    if (is_db) sub_imm(cg, cnt * 4u);
+                } else {
+                    ld_ecx(cg, (u8)k);
+                    mov_r11_off_ecx(cg, k_off);
+                }
+            }
+            k_off += 4u;
+        }
+
+        /* writeback */
+        if (writeback) {
+            /* IA: rn = start + cnt*4 = start + k_off */
+            /* DB: rn = start (already eax if is_db) */
+            ld_eax(cg, rn);
+            if (is_db) {
+                sub_imm(cg, cnt * 4u);
+                st_eax(cg, rn);
+            } else {
+                add_imm(cg, cnt * 4u);
+                st_eax(cg, rn);
+            }
+        }
+
+        {
+            /* compute slow body size to jmp over it */
+            u32 sb = 7u; /* ld_eax(rn) */
+            if (is_db) sb += 5u;
+            for (int k = 0; k <= 15; k++) {
+                if (!(reg_list & (1u << k))) continue;
+                if (is_load) {
+                    sb += 4u+3u+2u+6u+6u+10u+2u+4u+11u+7u+4u+4u+3u;
+                    if (k == 15) sb += 6u+2u+6u+7u;
+                } else {
+                    sb += 4u+3u+2u+6u+6u+7u+10u+2u+4u+4u+3u;
+                }
+            }
+            if (writeback) sb += 7u+5u+7u;
+            if (has_pc) sb += 9u+2u+9u+9u;
+            jmp_short(cg, (u8)sb);
+        }
+        /* inline slow path for bounds-fail case */
+        ld_eax(cg, rn);
+        if (is_db) sub_imm(cg, cnt * 4u);
+        {
+            u32 sl_off = 0;
+            for (int k = 0; k <= 15; k++) {
+                if (!(reg_list & (1u << k))) continue;
+                if (is_load) {
+                    sub_rsp_16(cg); mov_rcx_r14(cg); mov_edx_eax(cg); add_edx_imm(cg, sl_off);
+                    mov_r8d_imm(cg, 4u); lea_r9_rsp0(cg);
+                    mov_rax_imm64(cg, (u64)(uintptr_t)bus_read); call_rax(cg);
+                    mov_ecx_rsp0(cg); add_rsp_16(cg);
+                    test_al_jnz(cg, 5u); or_bl_1(cg); jmp_short(cg, 7u);
+                    if (k == 15) { emit_b(cg, 0x44); emit_b(cg, 0x89); emit_b(cg, 0xC8); }
+                    else         { st_ecx(cg, (u8)k); }
+                } else {
+                    sub_rsp_16(cg); mov_rcx_r14(cg); mov_edx_eax(cg); add_edx_imm(cg, sl_off);
+                    mov_r8d_imm(cg, 4u);
+                    if (k == 15) { emit_b(cg, 0x41); emit_b(cg, 0xB9); emit_w32(cg, insn_pc + 4u); }
+                    else         { mov_r9d_reg(cg, (u8)k); }
+                    mov_rax_imm64(cg, (u64)(uintptr_t)bus_write); call_rax(cg);
+                    add_rsp_16(cg); test_al_jnz(cg, 3u); or_bl_1(cg);
+                }
+                sl_off += 4u;
+            }
+        }
+        if (writeback) {
+            ld_eax(cg, rn);
+            if (is_db) { sub_imm(cg, cnt * 4u); st_eax(cg, rn); }
+            else        { add_imm(cg, cnt * 4u); st_eax(cg, rn); }
+        }
+        if (has_pc) {
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
+            jcc_rel8(cg, 0x73, 9u);
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+        }
+        return;
+    }
+
+slow_only_ldm:;
+    {
+        ld_eax(cg, rn);
+        if (is_db) sub_imm(cg, cnt * 4u);
+        u32 k_off = 0;
+        for (int k = 0; k <= 15; k++) {
+            if (!(reg_list & (1u << k))) continue;
+            if (is_load) {
+                sub_rsp_16(cg);
+                mov_rcx_r14(cg);
+                mov_edx_eax(cg);
+                add_edx_imm(cg, k_off);
+                mov_r8d_imm(cg, 4u);
+                lea_r9_rsp0(cg);
+                mov_rax_imm64(cg, (u64)(uintptr_t)bus_read);
+                call_rax(cg);
+                mov_ecx_rsp0(cg);
+                add_rsp_16(cg);
+                test_al_jnz(cg, 5u);
+                or_bl_1(cg);
+                jmp_short(cg, 7u);
+                if (k == 15) {
+                    emit_b(cg, 0x44); emit_b(cg, 0x89); emit_b(cg, 0xC8); /* mov r10d, ecx (save PC) */
+                } else {
+                    st_ecx(cg, (u8)k);
+                }
+            } else {
+                sub_rsp_16(cg);
+                mov_rcx_r14(cg);
+                mov_edx_eax(cg);
+                add_edx_imm(cg, k_off);
+                mov_r8d_imm(cg, 4u);
+                if (k == 15) {
+                    /* STM PC: write insn_pc+4 */
+                    emit_b(cg, 0x41); emit_b(cg, 0xB9); emit_w32(cg, insn_pc + 4u); /* mov r9d, imm32 */
+                } else {
+                    mov_r9d_reg(cg, (u8)k);
+                }
+                mov_rax_imm64(cg, (u64)(uintptr_t)bus_write);
+                call_rax(cg);
+                add_rsp_16(cg);
+                test_al_jnz(cg, 3u);
+                or_bl_1(cg);
+            }
+            k_off += 4u;
+        }
+        /* writeback */
+        if (writeback) {
+            ld_eax(cg, rn);
+            if (is_db) {
+                sub_imm(cg, cnt * 4u);
+                st_eax(cg, rn);
+            } else {
+                add_imm(cg, cnt * 4u);
+                st_eax(cg, rn);
+            }
+        }
+        /* PC commit for LDM with PC */
+        if (has_pc) {
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
+            jcc_rel8(cg, 0x73, 9u);
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+        }
+    }
+}
+
+/* ---- B.cond fast-path helpers (no pushfq/popfq) ---- */
+
+/* mov al, [r15 + CG_APSR_OFF + 3]  -> 41 8A 87 disp32 (7B) */
+static void ld_al_apsr_byte3(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x8A); emit_b(cg, 0x87);
+    emit_w32(cg, CG_APSR_OFF + 3u);
+}
+/* shr al, n  -> C0 E8 n (3B) */
+static void shr_al(codegen_t* cg, u8 n) {
+    emit_b(cg, 0xC0); emit_b(cg, 0xE8); emit_b(cg, n);
+}
+/* test al, imm8 -> A8 imm8 (2B) */
+static void test_al_imm8(codegen_t* cg, u8 m) {
+    emit_b(cg, 0xA8); emit_b(cg, m);
+}
+/* and al, imm8 -> 24 imm8 (2B) */
+static void and_al_imm8(codegen_t* cg, u8 m) {
+    emit_b(cg, 0x24); emit_b(cg, m);
+}
+/* cmp al, imm8 -> 3C imm8 (2B) */
+static void cmp_al_imm8(codegen_t* cg, u8 m) {
+    emit_b(cg, 0x3C); emit_b(cg, m);
+}
+/* mov ah, al  -> 88 C4 (2B) */
+static void mov_ah_al(codegen_t* cg) { emit_b(cg, 0x88); emit_b(cg, 0xC4); }
+/* shr ah, n  -> C0 EC n (3B) */
+static void shr_ah(codegen_t* cg, u8 n) {
+    emit_b(cg, 0xC0); emit_b(cg, 0xEC); emit_b(cg, n);
+}
+/* xor al, ah -> 30 E0 (2B) */
+static void xor_al_ah(codegen_t* cg) { emit_b(cg, 0x30); emit_b(cg, 0xE0); }
+/* jcc rel32: 0F 8X disp32 (6B) */
+static void emit_jcc_rel32(codegen_t* cg, u8 jcc, u32 rel32) {
+    emit_b(cg, 0x0F); emit_b(cg, jcc); emit_w32(cg, rel32);
+}
+
+/* B.cond fast path: mov al,[r15+APSR+3]; optional shr/test/and/cmp/xor; jcc rel32.
+   Layout: cond-test + jcc rel32(13) + st_pc(fall,11B) + jmp_short(11B) + st_pc(taken,11B).
+   al layout (byte3 of apsr): bit7=N bit6=Z bit5=C bit4=V. After shr 4: bit3=N bit2=Z bit1=C bit0=V. */
+static void emit_b_cond_fast(codegen_t* cg, const insn_t* i) {
+    if (i->cond == 0xE) { st_pc(cg, i->pc + 4u + i->imm); return; }
+    if (i->cond == 0xF) { st_pc(cg, i->pc + i->size);     return; }
+
+    u32 tgt = i->pc + 4u + i->imm;
+    u32 fal = i->pc + i->size;
+
+    ld_al_apsr_byte3(cg);                        /* 7B */
+    bool need_low = (i->cond >= 0x8);
+    if (need_low) shr_al(cg, 4u);               /* 3B: al = 0bNZCV */
+
+    u8 jcc_op;
+    switch (i->cond) {
+        /* simple bit-test on byte3 (no shr); test sets ZF; jnz=taken-when-bit-set */
+        case 0x0: test_al_imm8(cg, 0x40); jcc_op = 0x85; break; /* EQ: Z bit -> jne if Z=1 */
+        case 0x1: test_al_imm8(cg, 0x40); jcc_op = 0x84; break; /* NE: jz  if Z=0 */
+        case 0x2: test_al_imm8(cg, 0x20); jcc_op = 0x85; break; /* CS: jne if C=1 */
+        case 0x3: test_al_imm8(cg, 0x20); jcc_op = 0x84; break; /* CC: jz  if C=0 */
+        case 0x4: test_al_imm8(cg, 0x80); jcc_op = 0x85; break; /* MI: jne if N=1 */
+        case 0x5: test_al_imm8(cg, 0x80); jcc_op = 0x84; break; /* PL: jz  if N=0 */
+        case 0x6: test_al_imm8(cg, 0x10); jcc_op = 0x85; break; /* VS: jne if V=1 */
+        case 0x7: test_al_imm8(cg, 0x10); jcc_op = 0x84; break; /* VC: jz  if V=0 */
+        /* composite on low nibble (after shr 4): al = 0bNZCV */
+        case 0x8: /* HI: C=1 AND Z=0 -> al&0x06==0x02 */
+            and_al_imm8(cg, 0x06); cmp_al_imm8(cg, 0x02); jcc_op = 0x84; break;
+        case 0x9: /* LS: C=0 OR Z=1 */
+            and_al_imm8(cg, 0x06); cmp_al_imm8(cg, 0x02); jcc_op = 0x85; break;
+        case 0xA: /* GE: N==V */
+            mov_ah_al(cg); shr_ah(cg, 3u); xor_al_ah(cg);
+            test_al_imm8(cg, 0x01); jcc_op = 0x84; break;
+        case 0xB: /* LT: N!=V */
+            mov_ah_al(cg); shr_ah(cg, 3u); xor_al_ah(cg);
+            test_al_imm8(cg, 0x01); jcc_op = 0x85; break;
+        case 0xC: /* GT: Z=0 AND N==V */
+            mov_ah_al(cg); shr_ah(cg, 3u); xor_al_ah(cg);
+            test_al_imm8(cg, 0x05); jcc_op = 0x84; break;
+        case 0xD: /* LE: Z=1 OR N!=V */
+            mov_ah_al(cg); shr_ah(cg, 3u); xor_al_ah(cg);
+            test_al_imm8(cg, 0x05); jcc_op = 0x85; break;
+        default: return;
+    }
+    /* jcc rel32=13: skip 11B(fall st_pc) + 2B(jmp_short) = land at taken st_pc */
+    emit_jcc_rel32(cg, jcc_op, 13u);
+    st_pc(cg, fal);        /* 11B */
+    jmp_short(cg, 11u);    /* 2B: skip taken */
+    st_pc(cg, tgt);        /* 11B */
+}
+
+static void emit_op(codegen_t* cg, bus_t* b, const insn_t* i) {  /* NOLINT */
     switch (i->op) {
         case OP_NOP: case OP_T32_NOP: break;
 
@@ -772,11 +1258,25 @@ static void emit_op(codegen_t* cg, const insn_t* i) {
             emit_store(cg, i->rs, i->rn, i->imm + 4u, 4u);
             break;
 
+        /* stack ops */
+        case OP_PUSH:
+            emit_push_v(cg, b, (u16)i->reg_list); break;
+        case OP_POP:
+            emit_pop(cg, b, (u16)i->reg_list); break;
+
+        /* T32 LDM/STM */
+        case OP_T32_LDM:
+        case OP_T32_STM: {
+            bool is_load = (i->op == OP_T32_LDM);
+            emit_ldm_stm(cg, b, i->rn, (u16)i->reg_list, is_load, !i->add, i->writeback, i->pc);
+            break;
+        }
+
         /* branch terminators */
         case OP_B_UNCOND:
             emit_b_uncond(cg, i); break;
         case OP_B_COND: case OP_T32_B_COND:
-            emit_b_cond(cg, i); break;
+            emit_b_cond_fast(cg, i); break;
         case OP_T32_BL:
             emit_t32_bl(cg, i); break;
 
@@ -825,22 +1325,23 @@ static bool insn_native_ok(const insn_t* i) {
     }
 }
 
-cg_thunk_t codegen_emit(codegen_t* cg, const insn_t* ins, u8 n) {
+cg_thunk_t codegen_emit(codegen_t* cg, bus_t* b, const insn_t* ins, u8 n) {
     for (u8 k = 0; k < n; ++k) if (!codegen_supports(ins[k].op)) return NULL;
     for (u8 k = 0; k < n; ++k) if (!insn_native_ok(&ins[k]))     return NULL;
-    if (cg->used + (u32)n * 128u + 128u > cg->capacity) return NULL;
+    if (cg->used + (u32)n * 160u + 64u > cg->capacity) return NULL;
     u8* start = cg->buffer + cg->used;
     emit_prologue(cg);
     emit_clear_fail(cg);                /* xor ebx,ebx — failure flag */
-    for (u8 k = 0; k < n; ++k) emit_op(cg, &ins[k]);
-    /* branch terminators already wrote PC via emit_b_cond/uncond/bl; skip trailing store */
+    for (u8 k = 0; k < n; ++k) emit_op(cg, b, &ins[k]);
+    /* branch terminators / POP-with-PC already wrote PC; skip trailing store */
     opcode_t last_op = ins[n - 1].op;
     bool wrote_pc = (last_op == OP_B_COND    || last_op == OP_T32_B_COND ||
-                     last_op == OP_B_UNCOND  || last_op == OP_T32_BL);
+                     last_op == OP_B_UNCOND  || last_op == OP_T32_BL     ||
+                     last_op == OP_POP       || last_op == OP_T32_LDM);
     if (!wrote_pc) {
         u32 last = ins[n - 1].pc + ins[n - 1].size;
         st_pc(cg, last);
     }
     emit_epilogue_check(cg);            /* bl-check: halt-or-success */
-    return (cg_thunk_t)start;
+    return (cg_thunk_t)(uintptr_t)start;
 }

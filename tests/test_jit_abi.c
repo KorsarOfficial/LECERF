@@ -28,7 +28,7 @@ TEST(abi_single_insn) {
     ins.pc   = 0u;
     ins.size = 4u;
 
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &ins, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bus, &ins, 1u);
     ASSERT_TRUE(fn != NULL);
 
     /* WIN64 call: rcx=&cpu, rdx=&bus; prologue saves to r15/r14 */
@@ -72,7 +72,7 @@ TEST(abi_two_insn_block) {
     b.op = OP_T32_MOVW; b.rd = 1u; b.imm = 0x33334444u; b.pc = 4u; b.size = 4u;
 
     insn_t pair[2]; pair[0] = a; pair[1] = b;
-    cg_thunk_t fn2 = codegen_emit(&s_jit.cg, pair, 2u);
+    cg_thunk_t fn2 = codegen_emit(&s_jit.cg, &bus, pair, 2u);
     ASSERT_TRUE(fn2 != NULL);
     ASSERT_TRUE(fn2(&cpu, &bus));
     ASSERT_EQ_U32(cpu.r[0], 0x11112222u);

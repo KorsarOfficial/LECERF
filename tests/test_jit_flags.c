@@ -31,7 +31,7 @@ static void run_pair(opcode_t op, u32 a, u32 b, u8 sf,
     /* native */
     memset(&s_jit, 0, sizeof s_jit);
     jit_init(&s_jit);
-    cg_thunk_t fn = codegen_emit(&s_jit.cg, &ins, 1u);
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &bus, &ins, 1u);
     if (fn) (void)fn(&c1, &bus);
 
     /* interpreter */
