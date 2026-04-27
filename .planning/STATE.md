@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 ## Current Position
 
 Phase: 14 (in progress)
-Plan: 03 (complete — native NZCV via lahf+seto+shl; CMP/CMN/TST; ADDS/SUBS retrofit; test_jit_flags)
-Status: 14-03 complete; 14/14 ctest + 14/14 firmware; ready for 14-04
-Last activity: 2026-04-27 — 14-03 executed; emit_flags_nzcv/nz; CMP/CMN/TST native; ctest 13->14
+Plan: 04 (complete — native B.cond via APSR->EFLAGS+jcc rel32; B uncond; T32_BL; test_jit_branch)
+Status: 14-04 complete; 15/15 ctest; ready for 14-05
+Last activity: 2026-04-27 — 14-04 executed; emit_apsr_to_eflags; emit_b_cond/uncond/bl; ctest 14->15
 
 ## Performance Metrics
 
@@ -26,6 +26,7 @@ p13.06: 2 tasks, 1 file created, 5 modified, 10->11 tests, 25 min.
 p14.01: 3 tasks, 1 file created, 6 modified, 11->12 tests, 35 min.
 p14.02: 2 tasks, 1 file created, 2 modified, 12->13 tests, 45 min.
 p14.03: 2 tasks, 1 file created, 2 modified, 13->14 tests, 12 min.
+p14.04: 2 tasks, 1 file created, 2 modified, 14->15 tests, 75 min.
 
 ## Accumulated Context
 
@@ -51,11 +52,11 @@ p14.03: 2 tasks, 1 file created, 2 modified, 13->14 tests, 12 min.
 - p14.01: WIN64 ABI fix: thunk prologue saves rcx/rdx->r15/r14 (non-volatile); [r15+disp32] REX.B=1 addressing throughout; 4 pushes+sub rsp,32 = 64B stack aligned; jit_flush exported (zeros n_blocks+lookup_n+cg.used+all tables); snap_restore calls jit_flush (TB cache invalidation on rewind); test_jit_abi 15/15 assertions; 12/12 ctest + 14/14 firmware
 - p14.02: native LDR/STR: sub rsp,16 scratch slot per call site; bus_read (rcx=bus,rdx=addr,r8d=sz,r9=&out@[rsp+0]) + bus_write (r9d=val) via mov rax,imm64+call rax; bl failure accumulator (xor ebx,ebx at prologue; or bl,1 on fault; emit_epilogue_check dual-path); 22 new opcode families (LDR/STR/LDRB/STRB/LDRH/STRH imm+reg+SP+LIT T1+T32 + LDRD/STRD); LDRD/STRD uses i->rs for second reg; native coverage 17->39 families; 13/13 ctest + 14/14 firmware
 - p14.03: NZCV native: lahf clobbers AH (rax bits[15:8]); fix = save eax->r11d before lahf, movzx edx,ah before restoring eax; ARM_C=NOT CF for sub (xor r10d,1); emit_flags_nzcv(is_sub) + emit_flags_nz; CMP/CMN/TST discard result (no st_eax); T1 always-flag; T32 gate on set_flags; T32_ADDW/SUBW never flag; native coverage 39->48; 14/14 ctest + 14/14 firmware
+- p14.04: B.cond native: emit_apsr_to_eflags via pushfq+and(~0x08C1)+4xbt+setc/setnc+movzx+or+popfq; ARM.C stored as NOT(C) in CF so jcc table works (CS=jae, CC=jb, HI=ja, LS=jbe); emit_b_cond layout disp32=13 skips 11B+2B to taken label; emit_b_uncond+emit_t32_bl simple PC/LR stores; codegen_emit suppresses trailing st_pc for branch terminators; native coverage 48->52; 15/15 ctest
 
 ### Pending Todos
 
 - direct block chaining (jmp rel32 inter-TB)
-- B.cond native (conditional branch in thunk body) (14-04)
 - WASM-compatible socket layer (postMessage)
 
 ### Blockers
@@ -65,5 +66,5 @@ none.
 ## Session Continuity
 
 Last session: 2026-04-27
-Stopped at: Completed 14-03-PLAN.md (native NZCV lahf+seto; CMP/CMN/TST; ADDS/SUBS retrofit; 14/14 ctest)
+Stopped at: Completed 14-04-PLAN.md (native B.cond APSR->EFLAGS+jcc; B_UNCOND; T32_BL; 15/15 ctest)
 Resume file: none
