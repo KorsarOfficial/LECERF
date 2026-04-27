@@ -103,6 +103,16 @@ None.
 - 14-05: direct block chaining (jmp rel32 inter-TB) — foundational for 100M+ IPS target
 - FreeRTOS context switch now fully native (LDR/STR dominate hot path)
 
+## Self-Check: PASSED
+
+- FOUND: src/core/codegen.c
+- FOUND: tests/test_jit_ldr_str.c
+- FOUND: .planning/phases/14-jit-depth/14-02-SUMMARY.md
+- FOUND: commit 7c9b20f (Task 1)
+- FOUND: commit 619440d (Task 2)
+- ctest 13/13 pass
+- firmware/run_all.sh 14/14 pass
+
 ---
 *Phase: 14-jit-depth*
 *Completed: 2026-04-27*
