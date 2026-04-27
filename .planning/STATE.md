@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 
 ## Current Position
 
-Phase: 13 (shipped 2026-04-27, ready for /gsd:plan-phase 14)
-Plan: 06 (complete — TT-02 gap closed)
-Status: ALL 13-01..13-06 complete; TT-01..TT-08 all 8/8 verified by gsd-verifier; 11/11 ctest + 14/14 firmware
-Last activity: 2026-04-27 — gsd-verifier passed 8/8; ROADMAP marked Phase 13 shipped
+Phase: 14 (in progress)
+Plan: 01 (complete — WIN64 ABI fix, jit_flush, test_jit_abi)
+Status: 14-01 complete; 12/12 ctest + 14/14 firmware; ready for 14-02
+Last activity: 2026-04-27 — 14-01 executed; WIN64 ABI fixed in codegen; jit_flush exported; snap_restore wired
 
 ## Performance Metrics
 
@@ -23,6 +23,7 @@ p13.03: 2 tasks, 1 file created, 6 modified, 8->8 tests (snapshot tests already 
 p13.04: 2 tasks, 1 file created, 3 modified, 8->9 tests, 35 min.
 p13.05: 2 tasks, 5 files created, 2 modified, 9->10 tests, 45 min.
 p13.06: 2 tasks, 1 file created, 5 modified, 10->11 tests, 25 min.
+p14.01: 3 tasks, 1 file created, 6 modified, 11->12 tests, 35 min.
 
 ## Accumulated Context
 
@@ -45,6 +46,7 @@ p13.06: 2 tasks, 1 file created, 5 modified, 10->11 tests, 25 min.
 - p13.05: firmware/test_tt flash at 0x00000000 (emulator default); volatile sram_pad needed to prevent optimizer from eliminating loops
 - p13.05: phase 13 complete; TT-01..TT-08 all satisfied; 10/10 tests pass; shippable
 - p13.06: TT-02 ETH gap closure; frames[] side-blob in tt_t (NOT snap_blob_t); ev_t.payload reused as u32 frame_id; eth_inject_rx dual-use (record-time + replay-time); EVENT_ETH_RX no longer a no-op; 11/11 tests pass
+- p14.01: WIN64 ABI fix: thunk prologue saves rcx/rdx->r15/r14 (non-volatile); [r15+disp32] REX.B=1 addressing throughout; 4 pushes+sub rsp,32 = 64B stack aligned; jit_flush exported (zeros n_blocks+lookup_n+cg.used+all tables); snap_restore calls jit_flush (TB cache invalidation on rewind); test_jit_abi 15/15 assertions; 12/12 ctest + 14/14 firmware
 
 ### Pending Todos
 
@@ -59,6 +61,6 @@ none.
 
 ## Session Continuity
 
-Last session: 2026-04-26
-Stopped at: Completed 13-06-PLAN.md (TT-02 gap closed; phase 13 fully verified)
+Last session: 2026-04-27
+Stopped at: Completed 14-01-PLAN.md (WIN64 ABI fix; jit_flush; snap_restore wired)
 Resume file: none
