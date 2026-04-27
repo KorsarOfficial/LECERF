@@ -1,6 +1,7 @@
 #include "core/bus.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 void bus_init(bus_t* b) {
     memset(b, 0, sizeof(*b));
@@ -37,9 +38,9 @@ int bus_add_mmio(bus_t* b, const char* name, addr_t base, u32 size,
 
 bool bus_read(bus_t* b, addr_t a, u32 size, u32* out) {
     region_t* r = find_region(b, a);
-    if (!r) return false;
+    if (!r) { fprintf(stderr, "[BUS FAULT] read addr=0x%08x size=%u: no region\n", a, size); return false; }
     u32 off = a - r->base;
-    if (off + size > r->size) return false;
+    if (off + size > r->size) { fprintf(stderr, "[BUS FAULT] read addr=0x%08x size=%u: out of bounds (off=%u, rsize=%u)\n", a, size, off, r->size); return false; }
     if (r->kind == REGION_FLAT) {
         u32 v = 0;
         memcpy(&v, r->buf + off, size);
@@ -52,9 +53,9 @@ bool bus_read(bus_t* b, addr_t a, u32 size, u32* out) {
 
 bool bus_write(bus_t* b, addr_t a, u32 size, u32 val) {
     region_t* r = find_region(b, a);
-    if (!r || !r->writable) return false;
+    if (!r || !r->writable) { fprintf(stderr, "[BUS FAULT] write addr=0x%08x size=%u val=0x%08x: no region or not writable\n", a, size, val); return false; }
     u32 off = a - r->base;
-    if (off + size > r->size) return false;
+    if (off + size > r->size) { fprintf(stderr, "[BUS FAULT] write addr=0x%08x size=%u val=0x%08x: out of bounds\n", a, size, val); return false; }
     if (r->kind == REGION_FLAT) {
         memcpy(r->buf + off, &val, size);
         return true;

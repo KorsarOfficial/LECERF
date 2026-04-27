@@ -1,5 +1,6 @@
 #include "core/jit.h"
 #include <string.h>
+#include <stdio.h>
 
 void jit_init(jit_t* j) {
     memset(j, 0, sizeof(*j));
@@ -84,6 +85,12 @@ bool jit_run(jit_t* j, cpu_t* c, bus_t* b, exec_fn execute, u64* out_steps) {
         if (bk->native(c, b)) {
             steps = bk->n_ins;
             j->native_steps += steps;
+        } else {
+            fprintf(stderr, "[JIT FAULT] native thunk for block pc_start=0x%08x returned false, c->halted=%d, c->r[PC]=0x%08x, n_ins=%u\n",
+                    bk->pc_start, (int)c->halted, c->r[15], (unsigned)bk->n_ins);
+            for (u8 ii = 0; ii < bk->n_ins; ++ii) {
+                fprintf(stderr, "  ins[%u]: op=%d pc=0x%08x\n", ii, (int)bk->ins[ii].op, bk->ins[ii].pc);
+            }
         }
     }
     if (steps == 0) {

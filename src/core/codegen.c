@@ -511,9 +511,10 @@ static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
         /* fast body: r10_imm64(10) + r11d_eax(3) + add(3) + sub(7) = 23B setup
            + cnt*(ld_ecx(7) + store(7)) = cnt*14B */
         u32 fast_body = 23u + cnt * 14u;
-        /* slow body: ld_eax(7) + cnt*(sub_rsp(4)+mov_rcx(3)+mov_edx(2)+add_edx(6)+mov_r8d(6)+
-                                        mov_r9d(7)+mov_rax(10)+call(2)+add_rsp(4)+test(4)+or(3)) = 51B/reg */
-        u32 slow_body = 7u + cnt * 51u;
+        /* slow body: per-reg: ld_eax(7)+sub_rsp(4)+mov_rcx(3)+mov_edx(2)+add_edx(6)+mov_r8d(6)+
+                              mov_r9d(7)+mov_rax(10)+call(2)+add_rsp(4)+test(4)+or(3) = 58B/reg.
+           Note: ld_eax is inside the loop to refresh eax after call_rax clobbers it. */
+        u32 slow_body = cnt * 58u;
         /* jmp size: 2B if slow fits in rel8, else 5B for near jmp */
         u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
         /* jb/ja targets: from end of jcc(2B) to start of slow_path */
@@ -549,11 +550,11 @@ static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
             emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
 
-        /* slow path */
-        ld_eax(cg, REG_SP);
+        /* slow path: ld_eax(REG_SP) inside loop to refresh after call_rax clobbers rax */
         k_off = 0;
         for (int k = 0; k <= 14; k++) {
             if (!(reg_list & (1u << k))) continue;
+            ld_eax(cg, REG_SP);
             sub_rsp_16(cg);
             mov_rcx_r14(cg);
             mov_edx_eax(cg);
@@ -572,11 +573,11 @@ static void emit_push_v(codegen_t* cg, bus_t* b, u16 reg_list) {
     }
 
 slow_only_push:;
-    /* slow path only */
-    ld_eax(cg, REG_SP);
+    /* slow path only: ld_eax(REG_SP) inside loop to refresh after call_rax clobbers rax */
     u32 k_off = 0;
     for (int k = 0; k <= 14; k++) {
         if (!(reg_list & (1u << k))) continue;
+        ld_eax(cg, REG_SP);
         sub_rsp_16(cg);
         mov_rcx_r14(cg);
         mov_edx_eax(cg);
@@ -614,12 +615,13 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
            extra vs st_ecx = 26-7 = 19B -> +19 */
         u32 fast_body = 23u + cnt * 14u + 19u;
         if (has_pc) fast_body += 6u + 2u + 6u + 7u + 2u + 3u;  /* cmp+jae+and+store+jmp+or_bl_1 */
-        /* slow body: ld_eax(7) + cnt*(60B non-PC or 56B PC) + sp_update(7+5+7) + pc_commit
-           pc_commit: cmp_r10d(7)+jae(2)+and_r10d(7)+store(7)+jmp_short(2)+or_bl_1(3) = 28B */
-        u32 slow_body = 7u;
+        /* slow body: per-reg ld_eax(7) inside loop + cnt*(60B non-PC or 56B PC) + sp_update(7+5+7) + pc_commit
+           pc_commit: cmp_r10d(7)+jae(2)+and_r10d(7)+store(7)+jmp_short(2)+or_bl_1(3) = 28B
+           ld_eax is now INSIDE each loop iteration (7B each) to refresh base after call_rax clobbers rax */
+        u32 slow_body = 0u;
         for (int k = 0; k <= 15; k++) {
             if (!(reg_list & (1u << k))) continue;
-            slow_body += (k == 15) ? 56u : 60u;
+            slow_body += 7u + ((k == 15) ? 56u : 60u);  /* ld_eax(7) per iter */
         }
         slow_body += 7u + 5u + 7u;
         if (has_pc) slow_body += 7u + 2u + 7u + 7u + 2u + 3u;  /* 28B */
@@ -673,11 +675,11 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
             emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
         /* slow path (reached via bounds-check fallthrough only): */
-        ld_eax(cg, REG_SP);
         {
             u32 sl_off = 0;
             for (int k = 0; k <= 15; k++) {
                 if (!(reg_list & (1u << k))) continue;
+                ld_eax(cg, REG_SP);   /* reload: call_rax clobbers rax */
                 sub_rsp_16(cg);
                 mov_rcx_r14(cg);
                 mov_edx_eax(cg);
@@ -718,10 +720,10 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
 slow_only_pop:;
     /* slow path only (no flat SRAM or bounds overflow) */
     {
-        ld_eax(cg, REG_SP);
         u32 sp_off = 0;
         for (int k = 0; k <= 15; k++) {
             if (!(reg_list & (1u << k))) continue;
+            ld_eax(cg, REG_SP);   /* reload: call_rax clobbers rax */
             sub_rsp_16(cg);
             mov_rcx_r14(cg);
             mov_edx_eax(cg);
@@ -793,11 +795,13 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             }
         }
         if (writeback) fast_body += 7u + 5u + 7u; /* ld_eax+add/sub+st_eax */
-        /* slow body: precompute exact size */
-        u32 slow_body = 7u; /* ld_eax(rn) */
-        if (is_db) slow_body += 5u;
+        /* slow body: per-reg ld_eax+optional sub_imm inside loop to refresh base after call_rax clobbers rax.
+           ld_eax(7) + optional sub_imm(5 if is_db) per iteration; no ld_eax before loop. */
+        u32 slow_body = 0u;
         for (int k = 0; k <= 15; k++) {
             if (!(reg_list & (1u << k))) continue;
+            slow_body += 7u;                           /* ld_eax per iter */
+            if (is_db) slow_body += 5u;                /* sub_imm per iter */
             slow_body += is_load ? ((k == 15) ? 56u : 60u)
                                  : ((k == 15) ? 50u : 51u);
         }
@@ -876,12 +880,13 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             emit_b(cg, 0xE9); emit_w32(cg, slow_body);
         }
         /* inline slow path for bounds-fail case */
-        ld_eax(cg, rn);
-        if (is_db) sub_imm(cg, cnt * 4u);
+        /* ld_eax + optional sub_imm now INSIDE loop to refresh base after call_rax clobbers rax */
         {
             u32 sl_off = 0;
             for (int k = 0; k <= 15; k++) {
                 if (!(reg_list & (1u << k))) continue;
+                ld_eax(cg, rn);
+                if (is_db) sub_imm(cg, cnt * 4u);
                 if (is_load) {
                     sub_rsp_16(cg); mov_rcx_r14(cg); mov_edx_eax(cg); add_edx_imm(cg, sl_off);
                     mov_r8d_imm(cg, 4u); lea_r9_rsp0(cg);
@@ -919,12 +924,13 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
     }
 
 slow_only_ldm:;
+    /* ld_eax + optional sub_imm now INSIDE loop to refresh base after call_rax clobbers rax */
     {
-        ld_eax(cg, rn);
-        if (is_db) sub_imm(cg, cnt * 4u);
         u32 k_off = 0;
         for (int k = 0; k <= 15; k++) {
             if (!(reg_list & (1u << k))) continue;
+            ld_eax(cg, rn);
+            if (is_db) sub_imm(cg, cnt * 4u);
             if (is_load) {
                 sub_rsp_16(cg);
                 mov_rcx_r14(cg);
@@ -1368,11 +1374,13 @@ cg_thunk_t codegen_emit(codegen_t* cg, bus_t* b, const insn_t* ins, u8 n) {
     emit_prologue(cg);
     emit_clear_fail(cg);                /* xor ebx,ebx — failure flag */
     for (u8 k = 0; k < n; ++k) emit_op(cg, b, &ins[k]);
-    /* branch terminators / POP-with-PC already wrote PC; skip trailing store */
+    /* Branch terminators write PC internally; all others need explicit trailing st_pc.
+       OP_POP / OP_T32_LDM are terminators in is_terminator() but insn_native_ok()
+       guarantees they only reach here without PC in reg_list - so they never write
+       CG_PC_OFF. Emit the fall-through PC after them just like any non-branch insn. */
     opcode_t last_op = ins[n - 1].op;
     bool wrote_pc = (last_op == OP_B_COND    || last_op == OP_T32_B_COND ||
-                     last_op == OP_B_UNCOND  || last_op == OP_T32_BL     ||
-                     last_op == OP_POP       || last_op == OP_T32_LDM);
+                     last_op == OP_B_UNCOND  || last_op == OP_T32_BL);
     if (!wrote_pc) {
         u32 last = ins[n - 1].pc + ins[n - 1].size;
         st_pc(cg, last);
