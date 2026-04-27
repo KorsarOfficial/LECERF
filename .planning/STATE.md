@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 ## Current Position
 
 Phase: 13
-Plan: 05 (complete — phase done)
-Status: ALL 13-01..13-05 complete; TT-01..TT-08 all verified; firmware integration 3-run byte-eq passed; phase 13 shippable
-Last activity: 2026-04-26 — p13.05 TT-05/06/07/08 firmware integration test; tt_on_cycle stride fix
+Plan: 06 (complete — TT-02 gap closed)
+Status: ALL 13-01..13-06 complete; TT-01..TT-08 all verified including TT-02 ETH RX; 11/11 tests pass; 14/14 firmware tests pass
+Last activity: 2026-04-26 — p13.06 TT-02 closure; eth_inject_rx + tt_record_eth_rx + side-blob store + EVENT_ETH_RX replay byte-eq
 
 ## Performance Metrics
 
@@ -22,6 +22,7 @@ p13.02: 2 tasks, 1 file created, 3 modified, 6->8 tests, 30 min.
 p13.03: 2 tasks, 1 file created, 6 modified, 8->8 tests (snapshot tests already counted), 45 min.
 p13.04: 2 tasks, 1 file created, 3 modified, 8->9 tests, 35 min.
 p13.05: 2 tasks, 5 files created, 2 modified, 9->10 tests, 45 min.
+p13.06: 2 tasks, 1 file created, 5 modified, 10->11 tests, 25 min.
 
 ## Accumulated Context
 
@@ -43,6 +44,7 @@ p13.05: 2 tasks, 5 files created, 2 modified, 9->10 tests, 45 min.
 - p13.05: tt_on_cycle stride-boundary fix: use last_snap_cycle+stride threshold (not %stride==0); modulo fails when startup adds non-zero cycle offset before first instruction batch
 - p13.05: firmware/test_tt flash at 0x00000000 (emulator default); volatile sram_pad needed to prevent optimizer from eliminating loops
 - p13.05: phase 13 complete; TT-01..TT-08 all satisfied; 10/10 tests pass; shippable
+- p13.06: TT-02 ETH gap closure; frames[] side-blob in tt_t (NOT snap_blob_t); ev_t.payload reused as u32 frame_id; eth_inject_rx dual-use (record-time + replay-time); EVENT_ETH_RX no longer a no-op; 11/11 tests pass
 
 ### Pending Todos
 
@@ -58,5 +60,5 @@ none.
 ## Session Continuity
 
 Last session: 2026-04-26
-Stopped at: Completed 13-05-PLAN.md (phase 13 complete)
+Stopped at: Completed 13-06-PLAN.md (TT-02 gap closed; phase 13 fully verified)
 Resume file: none
