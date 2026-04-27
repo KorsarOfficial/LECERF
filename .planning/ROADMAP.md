@@ -49,21 +49,23 @@ firmware (FreeRTOS, DSP) without falling back to interpreter.
 
 **Depends on:** Phase 13 (snapshot needed for safe TB invalidation).
 **Requirements:** JIT-01..JIT-06
+**Plans:** 6 plans
 
 **Success criteria:**
 1. native LDR/STR works for FreeRTOS context switch (no fallback)
-2. CMP/ADDS/SUBS set NZCV flags correctly via x86 LEA
+2. CMP/ADDS/SUBS set NZCV flags correctly via x86 lahf+seto
 3. B.cond emits x86 jcc with rel32, falls through cleanly
-4. direct block chaining: terminator jumps directly to next TB
+4. direct block chaining: terminator hands off to next TB without C-frame return
 5. FreeRTOS 5M instructions in under 50ms (100M+ IPS)
 6. all v1.0 firmware tests pass through native JIT path
 
 **Plans:**
-- 14-01: helper-call ABI for memory ops, native LDR/STR
-- 14-02: flag-setter ops (CMP family) via LEA + manual NZCV
-- 14-03: B.cond + branch native emit
-- 14-04: direct block chaining + LRU eviction
-- 14-05: bench harness + speed regression test
+- [ ] 14-01-PLAN.md — WIN64 ABI fix: rcx/rdx -> r15/r14 prologue, [r15+R_OFF] addressing; jit_flush + snap_restore hook (Wave 1)
+- [ ] 14-02-PLAN.md — native LDR/STR via WIN64 bus_read/bus_write helper-call; LDRD/STRD pair; bl-flag fault path (Wave 2)
+- [ ] 14-03-PLAN.md — native NZCV via lahf+seto+bit shifts; CMP/CMN/TST family + ADD/SUB always-set retrofit (Wave 3)
+- [ ] 14-04-PLAN.md — native B.cond/B.uncond/T32_BL; APSR -> EFLAGS via pushfq+bt/setc; jcc rel32 (Wave 4)
+- [ ] 14-05-PLAN.md — pseudo-chain dispatch jit_run_chained + n_blocks overflow generation reset (Wave 5)
+- [ ] 14-06-PLAN.md — bench harness QPC + test_jit_bench 5M test7 <50ms regression (Wave 6)
 
 ---
 
@@ -140,12 +142,12 @@ This is the lecerf-ci product face.
 | Phase | Plans | Status |
 |-------|-------|--------|
 | 13. Time-Travel Kernel | 6 | Shipped 2026-04-27 (8/8 TT, 11 ctest + 14 fw) |
-| 14. JIT Depth          | 5 | Not started |
+| 14. JIT Depth          | 6 | Planned 2026-04-26 (6 plans, 6 waves; ready for /gsd:execute-phase 14) |
 | 15. WASM + Web IDE     | 5 | Not started |
 | 16. Python API + CI    | 5 | Not started |
 | 17. Landing & Dist     | 4 | Not started |
 
-**Total:** 25 plans across 5 phases.
+**Total:** 26 plans across 5 phases.
 
 ## Wave Plan: Phase 13
 
@@ -156,3 +158,14 @@ This is the lecerf-ci product face.
 | 3    | 13-04                | 13-02, 13-03      | tt_t lifecycle + rewind/step_back/diff                |
 | 4    | 13-05                | 13-04             | Integration firmware + 3-run byte-eq                  |
 | 5    | 13-06                | 13-04, 13-05      | Gap closure TT-02: ETH RX side-blob + replay byte-eq  |
+
+## Wave Plan: Phase 14
+
+| Wave | Plans  | Depends on | Notes                                                                 |
+|------|--------|------------|-----------------------------------------------------------------------|
+| 1    | 14-01  | (none)     | WIN64 ABI fix: r15=cpu, r14=bus prologue; jit_flush + snap_restore   |
+| 2    | 14-02  | 14-01      | Native LDR/STR via bus_read/bus_write helper-call (sequential due to shared codegen.c) |
+| 3    | 14-03  | 14-02      | NZCV flag setters + CMP/CMN/TST family (sequential due to shared codegen.c) |
+| 4    | 14-04  | 14-03      | B.cond / B.uncond / T32_BL with APSR -> EFLAGS reconstruction        |
+| 5    | 14-05  | 14-04      | jit_run_chained pseudo-chain + generation-reset eviction              |
+| 6    | 14-06  | 14-05      | Bench harness QPC + test_jit_bench 5M < 50ms regression              |
