@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-04-26)
 ## Current Position
 
 Phase: 14 (complete)
-Plan: 06 (complete — QPC timing; test_jit_bench; DWT batch; 57M IPS measured; 18/18 ctest; 14/14 firmware)
-Status: Phase 14 complete; 18/18 ctest; 14/14 firmware; almost-shippable (IPS 57M, ROADMAP 100M+ not met)
-Last activity: 2026-04-26 — 14-06 executed; QPC timing in main.c; test_jit_bench regression; DWT O(1) batch; ctest 17->18
+Plan: 07 (complete — native PUSH/POP/LDM/STM + B.cond fast path; 173M IPS; 19/19 ctest; 14/14 firmware)
+Status: Phase 14 SHIPPABLE; 19/19 ctest; 14/14 firmware; 173M IPS (100M+ ROADMAP target met)
+Last activity: 2026-04-26 — 14-07 executed; PUSH/POP/LDM/STM native codegen; B.cond bit-test; ctest 18->19
 
 ## Performance Metrics
 
@@ -29,6 +29,7 @@ p14.03: 2 tasks, 1 file created, 2 modified, 13->14 tests, 12 min.
 p14.04: 2 tasks, 1 file created, 2 modified, 14->15 tests, 75 min.
 p14.05: 3 tasks, 1 file created, 4 modified, 15->16 tests, 45 min.
 p14.06: 3 tasks, 2 files created, 3 modified, 17->18 tests, 90 min.
+p14.07: 5 tasks, 1 file created, 9 modified, 18->19 tests, 120 min.
 
 ## Accumulated Context
 
@@ -57,10 +58,11 @@ p14.06: 3 tasks, 2 files created, 3 modified, 17->18 tests, 90 min.
 - p14.04: B.cond native: emit_apsr_to_eflags via pushfq+and(~0x08C1)+4xbt+setc/setnc+movzx+or+popfq; ARM.C stored as NOT(C) in CF so jcc table works (CS=jae, CC=jb, HI=ja, LS=jbe); emit_b_cond layout disp32=13 skips 11B+2B to taken label; emit_b_uncond+emit_t32_bl simple PC/LR stores; codegen_emit suppresses trailing st_pc for branch terminators; native coverage 48->52; 15/15 ctest
 - p14.05: jit_run_chained: tight while loop (halted|total<max_steps|remaining<JIT_MAX_BLOCK_LEN|jit_run false); overshoot <=31 cycles; compile_block eviction: jit_flush+continue on n_blocks==JIT_MAX_BLOCKS (generation reset); run_steps_full_g+gdb use jit_run_chained; gdb->stepping skips chain; 16/16 ctest; firmware 11/14 (3 pre-existing failures from 14-04, not regressions)
 - p14.06: QPC timing in tools/main.c (always-on; IPS+elapsed to stderr); test_jit_bench (warmup 500K, peripheral memset, timed 5M-cap run, ASSERT elapsed<70ms, warns if >50ms); DWT O(1) batch update (cyccnt+=jit_steps); measured 57M IPS (range 47-64M, Windows jitter); ROADMAP 100M+ IPS NOT met; 18/18 ctest; 14/14 firmware; phase 14 status: almost-shippable
+- p14.07: codegen_emit gains bus_t* param for flat-SRAM optimisation; emit_push_v/emit_pop/emit_ldm_stm with flat-SRAM baked-pointer fast path (bounds check jb/ja rel8; r10=buf imm64; r11=buf+(eax-fbase)); emit_b_cond_fast: APSR byte3 direct bit-test (no pushfq/popfq); B.cond auto-fix Rule-1: jmp_short replaced with E9 rel32 when slow_body > 127; jb/ja targets pre-computed using actual jmp_sz; measured 173M IPS, 10.7ms, native=100%; bench gate <50ms; 19/19 ctest; ROADMAP 100M+ MET; phase 14 SHIPPABLE
 
 ### Pending Todos
 
-- Phase 15: PUSH/POP native codegen or REL32 direct block patching to reach 100M+ IPS
+- Phase 15: REL32 direct block patching (true zero-dispatch chaining) or further opcode expansion
 - WASM-compatible socket layer (postMessage)
 
 ### Blockers
@@ -70,5 +72,5 @@ none.
 ## Session Continuity
 
 Last session: 2026-04-26
-Stopped at: Completed 14-06-PLAN.md (QPC timing; test_jit_bench; DWT batch; 57M IPS; 18/18 ctest; Phase 14 complete)
+Stopped at: Completed 14-07-PLAN.md (native PUSH/POP/LDM/STM + B.cond fast path; 173M IPS; 19/19 ctest; Phase 14 SHIPPABLE)
 Resume file: none

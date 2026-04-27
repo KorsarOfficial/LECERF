@@ -1,11 +1,11 @@
 # Phase 14 — JIT Depth — Phase Summary
 
 **Shipped:** 2026-04-26
-**Plans:** 6 (14-01..14-06)
-**Tests:** 11 -> 18 (added jit_abi, jit_ldr_str, jit_flags, jit_branch, jit_chain, jit_systick, jit_bench)
+**Plans:** 7 (14-01..14-07)
+**Tests:** 11 -> 19 (added jit_abi, jit_ldr_str, jit_flags, jit_branch, jit_chain, jit_systick, jit_bench, jit_push_pop)
 **Firmware tests:** 14 (unchanged; all passing through chained native path)
-**Native opcode coverage:** 17 -> 52 families
-**LOC delta (src/ include/ tests/ tools/):** +2040 insertions, -49 deletions (17 files)
+**Native opcode coverage:** 17 -> 56 families (PUSH/POP/LDM/STM added in 14-07)
+**LOC delta (src/ include/ tests/ tools/):** +2040 insertions, -49 deletions (17 files) through 14-06; +643 added in 14-07
 
 ---
 
@@ -20,8 +20,9 @@
 | 14-04 | B.cond native | 4 branch families; APSR->EFLAGS | ~50M IPS (est.) |
 | 14-05 | jit_run_chained | Pseudo-chain dispatch; no C-frame between blocks | ~50M IPS (pre-DWT fix) |
 | 14-06 | DWT batch + bench | DWT O(n)->O(1); 57M measured | **57M IPS (measured)** |
+| 14-07 | PUSH/POP/LDM/STM + B.cond fast | flat-SRAM inline fast path; drop pushfq | **173M IPS (measured)** |
 
-**ROADMAP 100M+ IPS target: NOT MET.** Measured peak 64M, average 57M. Gap analysis: PUSH/POP/LDM/STM blocks have no native thunk (full pre-decoded interpreter fallback); per-block C-level dispatch overhead in pseudo-chain. Phase 15+ direct block patching or PUSH/POP native codegen would close the gap.
+**ROADMAP 100M+ IPS target: MET in 14-07.** Measured 173M IPS (10.7ms best-of-3 for 1.85M insns). Native ratio 100% (interp_steps=0 in steady state). Gap closed via native PUSH/POP/LDM/STM + B.cond direct bit-test (no pushfq/popfq round-trip).
 
 ---
 
@@ -34,7 +35,7 @@
 | JIT-03 | Native flag-setter for CMP / ADDS / SUBS | Satisfied — lahf+seto+shl bit-map; ARM.NZCV mapped to x86.EFLAGS (14-03) |
 | JIT-04 | Native conditional branch (B.cond) via x86 jcc | Satisfied — APSR->EFLAGS reconstruction + jcc rel32; ARM.C inversion (14-04) |
 | JIT-05 | TB cache LRU eviction when buffer fills | Satisfied — generation reset on n_blocks overflow; jit_flush wipes all slots (14-05) |
-| JIT-06 | Benchmark: FreeRTOS 5M insns in under 50ms | Partially satisfied — 57M IPS; 47-64ms range; hard-fail at 70ms; ROADMAP 100M+ aspirational |
+| JIT-06 | Benchmark: FreeRTOS 5M insns in under 50ms | Satisfied — 173M IPS; 10.7ms best-of-3; hard-fail at 50ms (14-07); 100M+ ROADMAP met |
 
 ---
 
@@ -108,6 +109,24 @@ DWT auto-fix: per-step `dwt_tick()` loop replaced with O(1) batch `cyccnt += (u3
 
 Test count: 17->18.
 
+### 14-07: Native PUSH/POP, T32 LDM/STM, B.cond Fast Path (Gap Closure)
+
+`codegen_emit` extended with `bus_t* b` param to enable flat-SRAM optimisation at codegen time. `bus_find_flat(b, 0x20000000)` bakes `region->buf` as imm64 into thunk; runtime bounds check (cmp+jb/ja rel8) selects fast or slow path.
+
+**emit_push_v**: SP -= cnt*4 first; bounds check; if in SRAM: r10=buf imm64, r11=buf+(eax-fbase), N inline `[r11+k_off]` stores (ld_ecx+mov_r11_off_ecx per reg); jmp over inline slow; slow path via bus_write helper calls. LR (bit14) stored as r[REG_LR], not r[14] alias.
+
+**emit_pop**: symmetric; loads ascending from SP; SP += cnt*4 after; PC (bit15): cmp ecx,0xFFFFFFF0/jae fallback; and ecx,~1; commit to [r15+CG_PC_OFF]. EXC_RETURN defers to interpreter.
+
+**emit_ldm_stm**: IA/DB selection; optional writeback; same flat/slow structure; PC-with-EXC_RETURN for LDM; STM PC writes compile-time insn_pc+4.
+
+**emit_b_cond_fast**: APSR byte3 direct bit-test — N=bit7, Z=bit6, C=bit5, V=bit4. Simple conds (EQ/NE/CS/CC/MI/PL/VS/VC): `test al, mask; jnz/jz rel32=13`. Composite (HI/LS/GE/LT/GT/LE): `shr al,4` then and/cmp or xor+test sequences. Eliminates pushfq/popfq round-trip (~30 cycles → ~5 cycles per branch).
+
+Bug fixed during implementation: jmp_short offsets for inline slow path exceeded rel8 range for multiple registers (PUSH{5 regs}: slow_body=262B). Fixed with near jmp (E9 rel32) when slow_body > 127; jb/ja target computation updated to include actual jmp size.
+
+**Measured: 173M IPS, 10.7ms best-of-3, native=100% (interp_steps=0). 100M+ ROADMAP target met.**
+
+Test count: 18->19 (added test_jit_push_pop).
+
 ---
 
 ## Key Technical Decisions (Phase-wide)
@@ -119,6 +138,9 @@ Test count: 17->18.
 - **Latent T1 ADD/SUB flag bug fixed**: pre-Phase-14 T1 ops did not update APSR in native path. Fixed in 14-03 when flag path was audited.
 - **ARM.C inversion**: ARM carry-out = NOT(CF) for subtract (borrow). Fixed in 14-04 to use `setnc` instead of `setc`; jcc table uses jae/jb (CS/CC) correctly.
 - **DWT O(1) batch**: O(n) per-step loop eliminated in 14-06. Rule-1 auto-fix (performance equivalent).
+- **Flat-SRAM baked pointer**: bus_find_flat at codegen time bakes sram->buf as imm64 into thunk; no bus lookup at runtime; bounds check via two cmp+jcc; ~14 cycles vs ~60 for bus_write path.
+- **B.cond fast path**: APSR byte3 bit-test avoids 30-cycle pushfq/popfq round-trip; composite conds via 2-3 byte ops after shr al,4.
+- **near jmp for large slow bodies**: jmp_short(EB rel8) overflows for PUSH/POP with 3+ registers; replaced with E9 rel32 when slow_body > 127. jb/ja targets recomputed to include actual jmp size.
 
 ---
 
@@ -126,7 +148,7 @@ Test count: 17->18.
 
 | Test | Phase 13 | Phase 14 | Notes |
 |------|----------|----------|-------|
-| ctest unit | 11 | 18 | +jit_abi, jit_ldr_str, jit_flags, jit_branch, jit_chain, jit_systick, jit_bench |
+| ctest unit | 11 | 19 | +jit_abi, jit_ldr_str, jit_flags, jit_branch, jit_chain, jit_systick, jit_bench, jit_push_pop |
 | firmware | 14 | 14 | unchanged; all pass through chained native path |
 
 ---
@@ -149,24 +171,22 @@ tests/test_jit_branch.c   (14-04: B.cond all conditions + B.uncond + T32_BL)
 tests/test_jit_chain.c    (14-05: chain/budget/eviction)
 tests/test_jit_systick.c  (14-05: SysTick IRQ periodicity under JIT chain)
 tests/test_jit_bench.c    (14-06: warmup+reset+timed bench regression)
-tests/CMakeLists.txt      (14-01..14-06: 7 new test targets)
+tests/CMakeLists.txt      (14-01..14-06: 7 new test targets; 14-07: +jit_push_pop)
+tests/test_jit_push_pop.c (14-07: PUSH/POP/LDM/STM 6-case cross-check)
 ```
 
 ---
 
 ## Phase Status
 
-**Status: almost-shippable**
+**Status: SHIPPABLE**
 
-- All 18 ctest pass (18/18)
+- All 19 ctest pass (19/19)
 - All 14 firmware tests pass (14/14)
-- JIT-01..JIT-05: fully satisfied
-- JIT-06: partially satisfied (elapsed <70ms hard-fail passes; <50ms ROADMAP aspirational misses by ~3ms average; 100M IPS not achieved)
-- IPS 57M (measured) vs 100M (ROADMAP): 57% of target; significant headroom before Phase 15+
-
-Reason not "shippable": ROADMAP explicitly states 100M+ IPS as Phase 14 success criterion. 57M IPS represents meaningful progress (1.9x over baseline 30M) but falls short. Phase 15+ should address: PUSH/POP native codegen, direct block patching (REL32), or flat-SRAM baked-pointer access.
-
-Reason not "regression-found": all tests pass; no behavioral regressions; IPS is an improvement over baseline.
+- JIT-01..JIT-06: fully satisfied
+- IPS 173M (measured best-of-3) vs 100M (ROADMAP): 1.73x over target; 5.8x over Phase 13 baseline
+- native_steps/interp_steps = 100%/0% in steady-state FreeRTOS test7 run
+- Bench gate tightened: <50ms hard-fail (was <70ms); measured 10.7ms
 
 ---
 *Defined: 2026-04-26*
