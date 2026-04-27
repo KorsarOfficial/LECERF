@@ -218,6 +218,40 @@ TEST(t32_stm_ia) {
     ASSERT_EQ_U32(g_cpu.r[0], base + 8u);
 }
 
+/* ---- Test 7: POP{r4,pc} with EXC_RETURN on stack — must NOT compile natively ----
+   Regression: codegen used to emit or_bl_1 for EXC_RETURN, which caused the epilogue
+   to set c->halted=1 and the emulator to halt instead of falling back to interpreter.
+   Fix: insn_native_ok returns false for POP/LDM with bit15 set -> codegen_emit returns NULL. */
+TEST(pop_exc_return_no_native) {
+    setup();
+    insn_t pop; memset(&pop, 0, sizeof pop);
+    pop.op       = OP_POP;
+    pop.reg_list = (1u<<4)|(1u<<15);   /* {r4, pc} */
+    pop.pc       = 0u;
+    pop.size     = 2u;
+
+    /* Blocks containing POP with PC must NOT be compiled natively; codegen returns NULL
+       so jit_run falls through to interpreter which can call exc_return() correctly. */
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &pop, 1u);
+    ASSERT_TRUE(fn == NULL);
+}
+
+/* ---- Test 8: T32 LDM with PC (bit15) — must NOT compile natively (same reason) ---- */
+TEST(t32_ldm_with_pc_no_native) {
+    setup();
+    insn_t ldm; memset(&ldm, 0, sizeof ldm);
+    ldm.op       = OP_T32_LDM;
+    ldm.rn       = 1u;
+    ldm.reg_list = (1u<<4)|(1u<<15);   /* {r4, pc} */
+    ldm.add      = true;
+    ldm.writeback= true;
+    ldm.pc       = 0u;
+    ldm.size     = 4u;
+
+    cg_thunk_t fn = codegen_emit(&s_jit.cg, &g_bus, &ldm, 1u);
+    ASSERT_TRUE(fn == NULL);
+}
+
 int main(void) {
     RUN(push_hi_regs);
     RUN(push_lo_regs);
@@ -225,5 +259,7 @@ int main(void) {
     RUN(pop_lo_regs);
     RUN(t32_ldm_ia);
     RUN(t32_stm_ia);
+    RUN(pop_exc_return_no_native);
+    RUN(t32_ldm_with_pc_no_native);
     TEST_REPORT();
 }

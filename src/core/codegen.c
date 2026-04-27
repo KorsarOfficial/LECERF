@@ -609,17 +609,20 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
     if (sram && sram->buf) {
         u32 fbase = sram->base;
         u32 fsize = sram->size;
-        /* fast body: setup(23) + cnt*(load_from_r11(7)+store_to_reg_or_pc(7)) + sp_update(7+5+7=19) */
+        /* fast body: setup(23) + cnt*(load_from_r11(7)+store_to_reg_or_pc(7)) + sp_update(7+5+7=19)
+           PC slot replaces st_ecx(7B) with cmp(6)+jae(2)+and(6)+store(7)+jmp(2)+or_bl_1(3) = 26B
+           extra vs st_ecx = 26-7 = 19B -> +19 */
         u32 fast_body = 23u + cnt * 14u + 19u;
-        if (has_pc) fast_body += 6u + 2u + 6u + 7u;  /* cmp(6)+jae(2)+and(6)+st_pc(7+4=11) -> see fast PC code */
-        /* slow body: ld_eax(7) + cnt*(60B non-PC or 56B PC) + sp_update(7+5+7) + pc_commit */
+        if (has_pc) fast_body += 6u + 2u + 6u + 7u + 2u + 3u;  /* cmp+jae+and+store+jmp+or_bl_1 */
+        /* slow body: ld_eax(7) + cnt*(60B non-PC or 56B PC) + sp_update(7+5+7) + pc_commit
+           pc_commit: cmp_r10d(7)+jae(2)+and_r10d(7)+store(7)+jmp_short(2)+or_bl_1(3) = 28B */
         u32 slow_body = 7u;
         for (int k = 0; k <= 15; k++) {
             if (!(reg_list & (1u << k))) continue;
             slow_body += (k == 15) ? 56u : 60u;
         }
         slow_body += 7u + 5u + 7u;
-        if (has_pc) slow_body += 9u + 2u + 9u + 9u;
+        if (has_pc) slow_body += 7u + 2u + 7u + 7u + 2u + 3u;  /* 28B */
         u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
         u32 ja_target = fast_body + jmp_sz;         /* from end of ja(2) to slow */
         u32 jb_target = 5u + 2u + fast_body + jmp_sz; /* from end of jb(2) */
@@ -642,15 +645,17 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
             if (!(reg_list & (1u << k))) continue;
             mov_ecx_r11_off(cg, k_off);   /* ecx = [r11 + k_off] = mem[sp + k_off] */
             if (k == 15) {
-                /* PC: check EXC_RETURN, mask bit0, store */
-                cmp_ecx_imm32(cg, 0xFFFFFFF0u);
-                /* jae +N: or bl,1 (3B) */
-                jcc_rel8(cg, 0x73, 3u);   /* jae -> fallback */
-                /* not EXC_RETURN: and ecx, ~1 then store PC */
-                and_ecx_imm32(cg, ~1u);
-                /* store to [r15+CG_PC_OFF] via ecx */
+                /* PC: check EXC_RETURN; if so mark failure so interpreter handles it.
+                   Layout: cmp(6)+jae+15(2)+and(6)+store(7)+jmp+3(2)+or_bl_1(3) = 26B
+                   jae +15 skips and(6)+store(7)+jmp(2)=15B, lands at or_bl_1. */
+                cmp_ecx_imm32(cg, 0xFFFFFFF0u);              /* 6B */
+                jcc_rel8(cg, 0x73, 6u + 7u + 2u);            /* jae +15 -> or_bl_1 */
+                /* not EXC_RETURN: mask Thumb bit, store PC */
+                and_ecx_imm32(cg, ~1u);                       /* 6B */
                 emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x8F);
-                emit_w32(cg, CG_PC_OFF);
+                emit_w32(cg, CG_PC_OFF);                      /* 7B: mov [r15+CG_PC_OFF],ecx */
+                jmp_short(cg, 3u);                            /* 2B: skip or_bl_1 */
+                or_bl_1(cg);                                  /* 3B: EXC_RETURN -> TB fail */
             } else {
                 st_ecx(cg, (u8)k);
             }
@@ -698,10 +703,14 @@ static void emit_pop(codegen_t* cg, bus_t* b, u16 reg_list) {
         add_imm(cg, cnt * 4u);
         st_eax(cg, REG_SP);
         if (has_pc) {
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
-            jcc_rel8(cg, 0x73, 9u);
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
-            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+            /* cmp_r10d(7)+jae+16(2)+and_r10d(7)+store(7)+jmp+3(2)+or_bl_1(3) = 28B
+               jae +16 skips and(7)+store(7)+jmp(2)=16B, lands at or_bl_1. */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u); /* 7B */
+            jcc_rel8(cg, 0x73, 7u + 7u + 2u);                                                  /* jae +16 */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);          /* 7B */
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);   /* 7B */
+            jmp_short(cg, 3u);                                                                  /* 2B */
+            or_bl_1(cg);                                                                        /* 3B */
         }
         return;
     }
@@ -737,10 +746,13 @@ slow_only_pop:;
         add_imm(cg, cnt * 4u);
         st_eax(cg, REG_SP);
         if (has_pc) {
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
-            jcc_rel8(cg, 0x73, 9u);
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
-            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+            /* cmp_r10d(7)+jae+16(2)+and_r10d(7)+store(7)+jmp+3(2)+or_bl_1(3) = 28B */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u); /* 7B */
+            jcc_rel8(cg, 0x73, 7u + 7u + 2u);                                                  /* jae +16 */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);          /* 7B */
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);   /* 7B */
+            jmp_short(cg, 3u);                                                                  /* 2B */
+            or_bl_1(cg);                                                                        /* 3B */
         }
     }
 }
@@ -770,7 +782,7 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             if (!(reg_list & (1u << k))) continue;
             if (is_load) {
                 fast_body += 14u; /* mov_ecx_r11_off(7)+st_ecx(7) */
-                if (k == 15) fast_body += 6u+2u+6u+7u - 7u; /* replace st_ecx(7) with cmp(6)+jae(2)+and(6)+st_pc(7) */
+                if (k == 15) fast_body += 6u+2u+6u+7u+2u+3u - 7u; /* replace st_ecx(7) with cmp+jae+and+store+jmp+or_bl_1 */
             } else {
                 if (k == 15) {
                     fast_body += 5u + 7u + 7u + 5u; /* mov_eax_imm(5)+mov_r11_off_eax(7)+ld_eax(7)+sub_imm?(5) */
@@ -790,7 +802,7 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
                                  : ((k == 15) ? 50u : 51u);
         }
         if (writeback) slow_body += 7u+5u+7u;
-        if (has_pc) slow_body += 9u+2u+9u+9u;
+        if (has_pc) slow_body += 7u + 2u + 7u + 7u + 2u + 3u;  /* cmp+jae+and+store+jmp+or_bl_1=28B */
         u32 jmp_sz = (slow_body <= 127u) ? 2u : 5u;
         u32 ja_target = fast_body + jmp_sz;
         u32 jb_target = 5u + 2u + fast_body + jmp_sz;
@@ -814,12 +826,15 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             if (is_load) {
                 mov_ecx_r11_off(cg, k_off);
                 if (k == 15) {
-                    /* store PC with EXC_RETURN check */
-                    cmp_ecx_imm32(cg, 0xFFFFFFF0u);
-                    jcc_rel8(cg, 0x73, 3u);
-                    and_ecx_imm32(cg, ~1u);
+                    /* EXC_RETURN: mark failure; else mask Thumb bit and store PC.
+                       cmp(6)+jae+15(2)+and(6)+store(7)+jmp+3(2)+or_bl_1(3) = 26B */
+                    cmp_ecx_imm32(cg, 0xFFFFFFF0u);              /* 6B */
+                    jcc_rel8(cg, 0x73, 6u + 7u + 2u);            /* jae +15 -> or_bl_1 */
+                    and_ecx_imm32(cg, ~1u);                       /* 6B */
                     emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0x8F);
-                    emit_w32(cg, CG_PC_OFF);
+                    emit_w32(cg, CG_PC_OFF);                      /* 7B */
+                    jmp_short(cg, 3u);                            /* 2B: skip or_bl_1 */
+                    or_bl_1(cg);                                  /* 3B */
                 } else {
                     st_ecx(cg, (u8)k);
                 }
@@ -892,10 +907,13 @@ static void emit_ldm_stm(codegen_t* cg, bus_t* b, u8 rn, u16 reg_list,
             else        { add_imm(cg, cnt * 4u); st_eax(cg, rn); }
         }
         if (has_pc) {
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
-            jcc_rel8(cg, 0x73, 9u);
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
-            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+            /* cmp_r10d(7)+jae+16(2)+and_r10d(7)+store(7)+jmp+3(2)+or_bl_1(3) = 28B */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u); /* 7B */
+            jcc_rel8(cg, 0x73, 7u + 7u + 2u);                                                  /* jae +16 */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);          /* 7B */
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);   /* 7B */
+            jmp_short(cg, 3u);                                                                  /* 2B */
+            or_bl_1(cg);                                                                        /* 3B */
         }
         return;
     }
@@ -959,10 +977,13 @@ slow_only_ldm:;
         }
         /* PC commit for LDM with PC */
         if (has_pc) {
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u);
-            jcc_rel8(cg, 0x73, 9u);
-            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);
-            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);
+            /* cmp_r10d(7)+jae+16(2)+and_r10d(7)+store(7)+jmp+3(2)+or_bl_1(3) = 28B */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xFA); emit_w32(cg, 0xFFFFFFF0u); /* 7B */
+            jcc_rel8(cg, 0x73, 7u + 7u + 2u);                                                  /* jae +16 */
+            emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, ~1u);          /* 7B */
+            emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97); emit_w32(cg, CG_PC_OFF);   /* 7B */
+            jmp_short(cg, 3u);                                                                  /* 2B */
+            or_bl_1(cg);                                                                        /* 3B */
         }
     }
 }
@@ -1327,6 +1348,13 @@ static bool insn_native_ok(const insn_t* i) {
         case OP_T32_LDRH_IMM: case OP_T32_STRH_IMM:
         case OP_T32_LDRD_IMM: case OP_T32_STRD_IMM:
             return i->add && i->index && !i->writeback;
+        /* POP/LDM with PC in reg_list may produce an EXC_RETURN value.
+           The epilogue always sets c->halted on bl=1, so we cannot use the
+           or_bl_1 TB-fail path to hand off to the interpreter safely.
+           Refuse native compilation; let the interpreter call exc_return(). */
+        case OP_POP:
+        case OP_T32_LDM:
+            return (i->reg_list & (1u << 15)) == 0;
         default:
             return true;
     }
