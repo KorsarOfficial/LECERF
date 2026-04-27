@@ -124,6 +124,142 @@ static void and_r9d_imm(codegen_t* cg, u32 v) {
     emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE1); emit_w32(cg, v);
 }
 
+/* ---- NZCV flag-setter helpers ---- */
+
+/* lahf (9F) + seto cl (0F 90 C1): sample SF/ZF/CF into AH; OF into cl. */
+static void emit_lahf_seto_cl(codegen_t* cg) {
+    emit_b(cg, 0x9F);
+    emit_b(cg, 0x0F); emit_b(cg, 0x90); emit_b(cg, 0xC1);
+}
+/* movzx edx, ah  (0F B6 D4) */
+static void movzx_edx_ah(codegen_t* cg) {
+    emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD4);
+}
+/* mov esi, edx  (89 D6) */
+static void mov_esi_edx(codegen_t* cg) {
+    emit_b(cg, 0x89); emit_b(cg, 0xD6);
+}
+/* shr esi, imm8  (C1 EE imm8) */
+static void shr_esi(codegen_t* cg, u8 n) {
+    emit_b(cg, 0xC1); emit_b(cg, 0xEE); emit_b(cg, n);
+}
+/* shl esi, imm8  (C1 E6 imm8) */
+static void shl_esi(codegen_t* cg, u8 n) {
+    emit_b(cg, 0xC1); emit_b(cg, 0xE6); emit_b(cg, n);
+}
+/* mov r10d, edx  (41 89 D2) */
+static void mov_r10d_edx(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0xD2);
+}
+/* shr r10d, imm8  (41 C1 EA imm8) */
+static void shr_r10d(codegen_t* cg, u8 n) {
+    emit_b(cg, 0x41); emit_b(cg, 0xC1); emit_b(cg, 0xEA); emit_b(cg, n);
+}
+/* and r10d, imm32  (41 81 E2 imm32) */
+static void and_r10d_imm(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xE2); emit_w32(cg, v);
+}
+/* shl r10d, imm8  (41 C1 E2 imm8) */
+static void shl_r10d(codegen_t* cg, u8 n) {
+    emit_b(cg, 0x41); emit_b(cg, 0xC1); emit_b(cg, 0xE2); emit_b(cg, n);
+}
+/* or esi, r10d  (44 09 D6): r/m=esi, reg=r10 — REX.R=1 */
+static void or_esi_r10d(codegen_t* cg) {
+    emit_b(cg, 0x44); emit_b(cg, 0x09); emit_b(cg, 0xD6);
+}
+/* xor r10d, imm32  (41 81 F2 imm32) — ARM_C = NOT x86_CF for SUB */
+static void xor_r10d_imm(codegen_t* cg, u32 v) {
+    emit_b(cg, 0x41); emit_b(cg, 0x81); emit_b(cg, 0xF2); emit_w32(cg, v);
+}
+/* movzx r10d, cl  (44 0F B6 D1) */
+static void movzx_r10d_cl(codegen_t* cg) {
+    emit_b(cg, 0x44); emit_b(cg, 0x0F); emit_b(cg, 0xB6); emit_b(cg, 0xD1);
+}
+/* mov r10d, [r15 + CG_APSR_OFF]  (45 8B 97 disp32) */
+static void ld_r10d_apsr(codegen_t* cg) {
+    emit_b(cg, 0x45); emit_b(cg, 0x8B); emit_b(cg, 0x97);
+    emit_w32(cg, CG_APSR_OFF);
+}
+/* mov [r15 + CG_APSR_OFF], r10d  (45 89 97 disp32) */
+static void st_r10d_apsr(codegen_t* cg) {
+    emit_b(cg, 0x45); emit_b(cg, 0x89); emit_b(cg, 0x97);
+    emit_w32(cg, CG_APSR_OFF);
+}
+/* or r10d, esi  (41 09 F2): r/m=r10, reg=esi — REX.B=1 */
+static void or_r10d_esi(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x09); emit_b(cg, 0xF2);
+}
+/* mov r11d, eax  (41 89 C3): save result before lahf clobbers AH */
+static void mov_r11d_eax(codegen_t* cg) {
+    emit_b(cg, 0x41); emit_b(cg, 0x89); emit_b(cg, 0xC3);
+}
+/* mov eax, r11d  (44 89 D8): restore result after flags sampled */
+static void mov_eax_r11d(codegen_t* cg) {
+    emit_b(cg, 0x44); emit_b(cg, 0x89); emit_b(cg, 0xD8);
+}
+
+/* Emit NZCV update after x86 ADD/SUB.
+   is_sub=true: ARM_C = NOT x86_CF (no-borrow convention).
+   lahf writes AH (bits[15:8] of rax) with EFLAGS, clobbering our result.
+   Sequence: save result to r11d -> lahf+seto -> extract AH to edx -> build NZCV
+   -> write apsr -> restore eax from r11d (for st_eax after us). */
+static void emit_flags_nzcv(codegen_t* cg, bool is_sub) {
+    mov_r11d_eax(cg);                /* r11d = result (before lahf clobbers AH) */
+    emit_lahf_seto_cl(cg);           /* AH = SF:ZF:0:AF:0:PF:1:CF; cl = OF */
+    movzx_edx_ah(cg);                /* edx = AH (flags); must be before mov eax,r11d */
+    mov_eax_r11d(cg);                /* eax = result (restored for caller's st_eax) */
+    /* N = (AH >> 7) << 31 -> esi */
+    mov_esi_edx(cg);
+    shr_esi(cg, 7u);
+    shl_esi(cg, 31u);
+    /* Z = ((AH >> 6) & 1) << 30 -> r10d, or into esi */
+    mov_r10d_edx(cg);
+    shr_r10d(cg, 6u);
+    and_r10d_imm(cg, 1u);
+    shl_r10d(cg, 30u);
+    or_esi_r10d(cg);
+    /* C = (AH & 1); for SUB: ARM_C = NOT x86_CF, so xor with 1 */
+    mov_r10d_edx(cg);
+    and_r10d_imm(cg, 1u);
+    if (is_sub) xor_r10d_imm(cg, 1u);   /* ARM_C = NOT CF for subtract */
+    shl_r10d(cg, 29u);
+    or_esi_r10d(cg);
+    /* V = OF (cl) << 28 -> r10d, or into esi */
+    movzx_r10d_cl(cg);
+    shl_r10d(cg, 28u);
+    or_esi_r10d(cg);
+    /* merge: apsr = (apsr & 0x0FFFFFFF) | esi */
+    ld_r10d_apsr(cg);
+    and_r10d_imm(cg, 0x0FFFFFFFu);
+    or_r10d_esi(cg);
+    st_r10d_apsr(cg);
+}
+
+/* NZ-only update for AND/ORR/EOR/TST/MOV-S. C and V unchanged.
+   Same lahf/AH clobber concern: save eax to r11d, extract AH to edx,
+   then restore eax. */
+static void emit_flags_nz(codegen_t* cg) {
+    mov_r11d_eax(cg);                /* r11d = result */
+    emit_b(cg, 0x9F);               /* lahf */
+    movzx_edx_ah(cg);                /* edx = AH; must precede mov eax,r11d */
+    mov_eax_r11d(cg);                /* eax = result (restored for caller's st_eax) */
+    /* N = (AH >> 7) << 31 */
+    mov_esi_edx(cg);
+    shr_esi(cg, 7u);
+    shl_esi(cg, 31u);
+    /* Z = ((AH >> 6) & 1) << 30 */
+    mov_r10d_edx(cg);
+    shr_r10d(cg, 6u);
+    and_r10d_imm(cg, 1u);
+    shl_r10d(cg, 30u);
+    or_esi_r10d(cg);
+    /* preserve C (bit 29) and V (bit 28); clear only N (bit 31) and Z (bit 30) */
+    ld_r10d_apsr(cg);
+    and_r10d_imm(cg, 0x3FFFFFFFu);
+    or_r10d_esi(cg);
+    st_r10d_apsr(cg);
+}
+
 /* WIN64 thunk prologue: save non-volatile r15/r14/rbx/rsi; shadow space; load cpu/bus.
    4 pushes (32B) + sub rsp,32 = 64B total; entry rsp is 8 mod 16 (ret addr on stack),
    after 4 pushes (32B mod 16 = 0) still 8 mod 16, sub 32 (0 mod 16) -> 8 mod 16 restored. */
@@ -265,6 +401,11 @@ bool codegen_supports(opcode_t op) {
         case OP_T32_EOR_IMM:
         case OP_T32_ADDW: case OP_T32_SUBW:
         case OP_T32_MOVW:
+        /* flag-only ops (CMP/CMN/TST family) */
+        case OP_CMP_IMM:    case OP_CMP_REG:    case OP_CMP_REG_T2:
+        case OP_CMN_REG:    case OP_TST_REG:
+        case OP_T32_CMP_IMM:    case OP_T32_CMP_REG:
+        case OP_T32_CMN_IMM:    case OP_T32_CMN_REG:
         /* memory ops */
         case OP_LDR_IMM:    case OP_STR_IMM:
         case OP_LDRB_IMM:   case OP_STRB_IMM:
@@ -288,46 +429,155 @@ static void emit_op(codegen_t* cg, const insn_t* i) {
     switch (i->op) {
         case OP_NOP: case OP_T32_NOP: break;
 
-        case OP_MOV_IMM: case OP_T32_MOV_IMM: case OP_T32_MOVW:
-            mov_eax_imm(cg, i->imm); st_eax(cg, i->rd); break;
+        /* MOV: T1 MOV_IMM always sets NZ; T32 MOV_IMM/MOVW conditional on set_flags */
+        case OP_MOV_IMM:
+            mov_eax_imm(cg, i->imm);
+            /* test eax,eax (85 C0) to set NZ flags; T1 always sets */
+            emit_b(cg, 0x85); emit_b(cg, 0xC0);
+            emit_flags_nz(cg);
+            st_eax(cg, i->rd); break;
+
+        case OP_T32_MOV_IMM:
+            mov_eax_imm(cg, i->imm);
+            if (i->set_flags) {
+                emit_b(cg, 0x85); emit_b(cg, 0xC0);
+                emit_flags_nz(cg);
+            }
+            st_eax(cg, i->rd); break;
+
+        case OP_T32_MOVW:
+            mov_eax_imm(cg, i->imm);
+            st_eax(cg, i->rd); break;   /* MOVW never sets flags */
 
         case OP_MOV_REG:
-            ld_eax(cg, i->rm); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rm);
+            if (i->set_flags) {
+                emit_b(cg, 0x85); emit_b(cg, 0xC0);
+                emit_flags_nz(cg);
+            }
+            st_eax(cg, i->rd); break;
 
+        /* T1 ADD_REG/SUB_REG: always set flags outside IT */
         case OP_ADD_REG:
-            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_add_ec(cg); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_add_ec(cg);
+            emit_flags_nzcv(cg, false);
+            st_eax(cg, i->rd); break;
 
         case OP_SUB_REG:
-            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_sub_ec(cg); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_sub_ec(cg);
+            emit_flags_nzcv(cg, true);
+            st_eax(cg, i->rd); break;
 
-        case OP_ADD_IMM3: case OP_ADD_IMM8:
-        case OP_T32_ADD_IMM: case OP_T32_ADDW:
-            ld_eax(cg, i->rn); add_imm(cg, i->imm); st_eax(cg, i->rd); break;
+        /* T1 ADD_IMM3/IMM8: always set flags */
+        case OP_ADD_IMM3:
+            ld_eax(cg, i->rn); add_imm(cg, i->imm);
+            emit_flags_nzcv(cg, false);
+            st_eax(cg, i->rd); break;
 
-        case OP_SUB_IMM3: case OP_SUB_IMM8:
-        case OP_T32_SUB_IMM: case OP_T32_SUBW:
-            ld_eax(cg, i->rn); sub_imm(cg, i->imm); st_eax(cg, i->rd); break;
+        case OP_ADD_IMM8:
+            ld_eax(cg, i->rn); add_imm(cg, i->imm);
+            emit_flags_nzcv(cg, false);
+            st_eax(cg, i->rd); break;
 
+        /* T1 SUB_IMM3/IMM8: always set flags */
+        case OP_SUB_IMM3:
+            ld_eax(cg, i->rn); sub_imm(cg, i->imm);
+            emit_flags_nzcv(cg, true);
+            st_eax(cg, i->rd); break;
+
+        case OP_SUB_IMM8:
+            ld_eax(cg, i->rn); sub_imm(cg, i->imm);
+            emit_flags_nzcv(cg, true);
+            st_eax(cg, i->rd); break;
+
+        /* T32 ADD_IMM: S-bit conditional */
+        case OP_T32_ADD_IMM:
+            ld_eax(cg, i->rn); add_imm(cg, i->imm);
+            if (i->set_flags) emit_flags_nzcv(cg, false);
+            st_eax(cg, i->rd); break;
+
+        /* T32 ADDW: T4 encoding, no S bit, never sets flags */
+        case OP_T32_ADDW:
+            ld_eax(cg, i->rn); add_imm(cg, i->imm);
+            st_eax(cg, i->rd); break;
+
+        /* T32 SUB_IMM: S-bit conditional */
+        case OP_T32_SUB_IMM:
+            ld_eax(cg, i->rn); sub_imm(cg, i->imm);
+            if (i->set_flags) emit_flags_nzcv(cg, true);
+            st_eax(cg, i->rd); break;
+
+        /* T32 SUBW: T4 encoding, no S bit, never sets flags */
+        case OP_T32_SUBW:
+            ld_eax(cg, i->rn); sub_imm(cg, i->imm);
+            st_eax(cg, i->rd); break;
+
+        /* T1 AND_REG: always sets NZ */
         case OP_AND_REG:
-            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_and_ec(cg); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_and_ec(cg);
+            emit_flags_nz(cg);
+            st_eax(cg, i->rd); break;
+
         case OP_T32_AND_IMM:
             ld_eax(cg, i->rn);
             emit_b(cg, 0x25); emit_w32(cg, i->imm);
+            if (i->set_flags) emit_flags_nz(cg);
             st_eax(cg, i->rd); break;
 
+        /* T1 ORR_REG: always sets NZ */
         case OP_ORR_REG:
-            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_or_ec(cg); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_or_ec(cg);
+            emit_flags_nz(cg);
+            st_eax(cg, i->rd); break;
+
         case OP_T32_ORR_IMM:
             ld_eax(cg, i->rn);
             emit_b(cg, 0x0D); emit_w32(cg, i->imm);
+            if (i->set_flags) emit_flags_nz(cg);
             st_eax(cg, i->rd); break;
 
+        /* T1 EOR_REG: always sets NZ */
         case OP_EOR_REG:
-            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_xor_ec(cg); st_eax(cg, i->rd); break;
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm); op_xor_ec(cg);
+            emit_flags_nz(cg);
+            st_eax(cg, i->rd); break;
+
         case OP_T32_EOR_IMM:
             ld_eax(cg, i->rn);
             emit_b(cg, 0x35); emit_w32(cg, i->imm);
+            if (i->set_flags) emit_flags_nz(cg);
             st_eax(cg, i->rd); break;
+
+        /* CMP family: compute result, set NZCV, discard result */
+        case OP_CMP_IMM: case OP_T32_CMP_IMM:
+            ld_eax(cg, i->rn);
+            sub_imm(cg, i->imm);
+            emit_flags_nzcv(cg, true);
+            break;  /* no store */
+
+        case OP_CMP_REG: case OP_CMP_REG_T2: case OP_T32_CMP_REG:
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm);
+            op_sub_ec(cg);
+            emit_flags_nzcv(cg, true);
+            break;  /* no store */
+
+        case OP_CMN_REG: case OP_T32_CMN_REG:
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm);
+            op_add_ec(cg);
+            emit_flags_nzcv(cg, false);
+            break;  /* no store */
+
+        case OP_T32_CMN_IMM:
+            ld_eax(cg, i->rn);
+            add_imm(cg, i->imm);
+            emit_flags_nzcv(cg, false);
+            break;  /* no store */
+
+        case OP_TST_REG:
+            ld_eax(cg, i->rn); ld_ecx(cg, i->rm);
+            op_and_ec(cg);
+            emit_flags_nz(cg);
+            break;  /* no store; TST = AND with discard, NZ only */
 
         /* === LDR/STR immediate offset === */
         case OP_LDR_IMM:    case OP_T32_LDR_IMM:
