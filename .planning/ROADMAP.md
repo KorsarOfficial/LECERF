@@ -97,13 +97,17 @@ front-end (lecerf-learn product face).
 
 ### Phase 16: Python API + CI Runner
 
-**Goal:** Python bindings, pytest plugin, Docker image, GitHub Action.
-This is the lecerf-ci product face.
+**Goal:** Build the lecerf-ci product face: pip-installable Python wrapper
+around the LECERF C engine, pytest plugin with fixtures for assertions on
+UART/registers/GPIO, Docker image <50MB, GitHub Action with <30s 3-test
+sample-repo run.
 
-**Depends on:** Phase 13 (snapshot/restore exposed in API).
+**Depends on:** Phase 13 (snapshot/restore exposed in API), Phase 14 (engine
+performance budget the &lt;30s CI gate relies on).
 **Requirements:** CI-01..CI-06
+**Plans:** 5 plans
 
-**Success criteria:**
+**Success criteria (observable):**
 1. pip install lecerf (or local wheel) works
 2. import lecerf; Board("stm32f407").flash(...).run() returns exit cause
 3. pytest can assert on UART output, register state, GPIO toggles
@@ -111,11 +115,11 @@ This is the lecerf-ci product face.
 5. GitHub Action sample repo passes a 3-test suite under 30s
 
 **Plans:**
-- 16-01: Python ctypes bindings or CFFI wrapper
-- 16-02: pytest fixtures + assertions
-- 16-03: Dockerfile + multi-stage minimal image
-- 16-04: GitHub Action wrapper + sample workflow
-- 16-05: example repo with 3-firmware test suite
+- [ ] 16-01-PLAN.md — board_t opaque struct + lecerf.h ABI + globals refactor (Wave 1)
+- [ ] 16-02-PLAN.md — Python ctypes wrapper via scikit-build-core + Board/RunResult/Cpu/Uart/Gpio + 6 smoke tests (Wave 2)
+- [ ] 16-03-PLAN.md — pytest plugin via pytest11 entry point + 3 example tests covering GPIO/UART/registers (Wave 3)
+- [ ] 16-04-PLAN.md — two-stage alpine Dockerfile + .dockerignore + runner.py + 50MB size gate (Wave 4)
+- [ ] 16-05-PLAN.md — GitHub Action manifest + release workflow + lecerf-ci-example sample repo (Wave 5)
 
 ---
 
@@ -145,7 +149,7 @@ This is the lecerf-ci product face.
 | 13. Time-Travel Kernel | 6 | Shipped 2026-04-27 (8/8 TT, 11 ctest + 14 fw) |
 | 14. JIT Depth          | 7 | Shipped 2026-04-27 (6/6 JIT, 19 ctest + 14 fw; 5M insns 38-46ms = 100M+ IPS; gap closure 14-07) |
 | 15. WASM + Web IDE     | 5 | Not started |
-| 16. Python API + CI    | 5 | Not started |
+| 16. Python API + CI    | 5 | Planned 2026-04-28 (5 plans / 5 waves) |
 | 17. Landing & Dist     | 4 | Not started |
 
 **Total:** 27 plans across 5 phases.
@@ -171,3 +175,13 @@ This is the lecerf-ci product face.
 | 5    | 14-05  | 14-04      | jit_run_chained pseudo-chain + generation-reset eviction              |
 | 6    | 14-06  | 14-05      | Bench harness QPC + test_jit_bench 5M < 50ms regression              |
 | 7    | 14-07  | 14-06      | Gap closure JIT-06: native PUSH/POP/LDM/STM + B.cond fast path; 100M+ IPS hard-gated  |
+
+## Wave Plan: Phase 16
+
+| Wave | Plans  | Depends on    | Notes                                                                                 |
+|------|--------|---------------|---------------------------------------------------------------------------------------|
+| 1    | 16-01  | (none)        | board_t opaque struct + lecerf.h ABI + globals refactor; foundational multi-instance safety |
+| 2    | 16-02  | 16-01         | Python ctypes wrapper via scikit-build-core; Board/RunResult/Cpu/Uart/Gpio + 6 smoke  |
+| 3    | 16-03  | 16-02         | pytest plugin via pytest11 entry point; 3 example tests for GPIO/UART/registers       |
+| 4    | 16-04  | 16-02         | Two-stage alpine Dockerfile; <50MB size gate; runner.py entry script                  |
+| 5    | 16-05  | 16-03, 16-04  | GitHub Action manifest + release.yml + lecerf-ci-example sample repo                  |
