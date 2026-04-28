@@ -251,15 +251,6 @@ arm-none-eabi-gdb firmware.elf
 | `0xE000ED90`-`0xE000EDF0`   | MPU |
 | `0xE000EDFC`                | DEMCR |
 
-## Roadmap (v2.0)
-
-- [x] **Phase 13 — Time-Travel Kernel** (shipped 2026-04-27, 8/8 TT verified)
-- [ ] **Phase 14 — JIT Depth** (target 100M+ IPS via direct chaining +
-  native LDR/STR + flag-setters via LEA + `B.cond` -> `jcc`)
-- [ ] **Phase 15 — WASM + Web IDE** (emscripten + Monaco editor + lessons)
-- [ ] **Phase 16 — Python API + CI** (pytest plugin + Docker + GitHub Action)
-- [ ] **Phase 17 — Landing & Distribution** (release pipeline + lecerf.dev)
-
 ## License
 
 MIT.
