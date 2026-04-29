@@ -130,3 +130,17 @@ Full per-requirement matrix in `PHASE-SUMMARY.md`.
 
 Recommended: **Phase 17 (release pipeline + landing)** — small, deterministic,
 publishes the first public GH Release. Then **Phase 15 (WASM + Web IDE)**.
+
+## Commits
+
+- `dacc5b9` — `ci: lecerf-runner action.yml + release.yml docker+wheel pipeline`
+- `f1e4805` — `examples: lecerf-ci-example sample repo with 3 firmware + 3 tests + readme`
+- `e308a66` — `roadmap: mark python+ci runner shipped; 5/5 plans; 20MB image; CI-01..CI-06 met`
+
+## Self-Check: PASSED
+
+All listed files verified to exist on disk; all three commit hashes verified
+in `git log`; sample repo's pytest runs 3/3 in 0.37s; YAML files all parse
+cleanly under `python -c "import yaml; yaml.safe_load(...)"`. No `.planning/`
+subtree found inside `examples/lecerf-ci-example/`. No pytest droppings
+(`.pytest_cache/`, `__pycache__/`) committed.
