@@ -1,0 +1,52 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  windows-smoke:
+    name: Windows smoke — MinGW DLL on MSVC Python
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # MSYS2 ships MinGW-w64 GCC and CMake; no extra install needed
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            make
+
+      # Build liblecerf.dll with MinGW toolchain (code uses __builtin_ctz etc.)
+      - name: Build liblecerf.dll (MinGW)
+        shell: msys2 {0}
+        run: |
+          cmake -B build_ci -G "MinGW Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLECERF_BUILD_PYTHON=ON
+          cmake --build build_ci --target liblecerf -j4
+          ls build_ci/liblecerf.dll
+
+      # Copy DLL into python package directory (editable install picks it up)
+      - name: Stage DLL for Python package
+        shell: pwsh
+        run: Copy-Item build_ci\liblecerf.dll python\lecerf\liblecerf.dll
+
+      # Use MSVC-built CPython — this is the MinGW-DLL-on-MSVC-Python smoke
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lecerf (editable, no recompile)
+        run: pip install -e python/
+
+      # Smoke import — proves ctypes loads MinGW DLL into MSVC CPython
+      - name: Import smoke
+        run: python -c "from lecerf import Board; b = Board('stm32f103'); print(b)"
+
+      # Full 6-test pytest suite
+      - name: pytest 6 smoke tests
+        run: python -m pytest python/tests/ -v
