@@ -13,9 +13,10 @@
 #define UART_SIZE 0x1000u
 
 typedef struct uart_s {
-    int (*sink)(int c); /* TX sink; NULL -> fputc(stdout) */
-    bool replay_mode;   /* true -> suppress TX; RX from rx_q */
-    u8   rx_q[64];      /* circular RX byte queue (power-of-2 size) */
+    int (*sink)(void* ctx, int c); /* TX sink: ctx=sink_ctx, c=byte; NULL -> fputc(stdout) */
+    void* sink_ctx;                /* first arg passed to sink */
+    bool replay_mode;              /* true -> suppress TX; RX from rx_q */
+    u8   rx_q[64];                 /* circular RX byte queue (power-of-2 size) */
     u8   rx_head;
     u8   rx_tail;
 } uart_t;

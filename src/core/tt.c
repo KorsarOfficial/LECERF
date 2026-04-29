@@ -97,12 +97,15 @@ bool snap_save(snap_blob_t* b, cpu_t* c, bus_t* bus, tt_periph_t* p) {
     b->st         = *p->st;
     b->nvic       = *p->nv;
     b->scb        = *p->scb;
+    b->scb.ctx    = NULL;   /* don't serialize per-board back-pointer */
     b->mpu        = *p->mpu;
     b->dwt        = *p->dwt;
     b->stm32      = *p->stm32;
     b->eth_state  = *p->eth;
     b->eth_state.bus = NULL;  /* don't serialize back-pointer */
-    b->uart_state = *p->uart;
+    b->uart_state          = *p->uart;
+    b->uart_state.sink     = NULL;   /* don't serialize TX sink callback */
+    b->uart_state.sink_ctx = NULL;   /* don't serialize TX sink context */
     b->sram_size  = SRAM_SIZE;
     memcpy(b->sram, sr->buf, SRAM_SIZE);
     b->checksum   = 0u;
@@ -123,13 +126,19 @@ bool snap_restore(const snap_blob_t* b, cpu_t* c, bus_t* bus, tt_periph_t* p) {
     *c        = b->cpu;
     *p->st    = b->st;
     *p->nv    = b->nvic;
-    *p->scb   = b->scb;
+    { void* saved_ctx = p->scb->ctx; *p->scb = b->scb; p->scb->ctx = saved_ctx; } /* fix ctx back-pointer */
     *p->mpu   = b->mpu;
     *p->dwt   = b->dwt;
     *p->stm32 = b->stm32;
     *p->eth   = b->eth_state;
     p->eth->bus = bus;  /* fix back-pointer */
-    *p->uart  = b->uart_state;
+    { /* restore uart but preserve TX sink (not serialized) */
+      int (*saved_sink)(void*,int) = p->uart->sink;
+      void* saved_sink_ctx = p->uart->sink_ctx;
+      *p->uart = b->uart_state;
+      p->uart->sink     = saved_sink;
+      p->uart->sink_ctx = saved_sink_ctx;
+    }
     memcpy(sr->buf, b->sram, SRAM_SIZE);
     run_dcache_invalidate();
     /* TT safety: after snap_restore, all compiled TBs reference the pre-restore

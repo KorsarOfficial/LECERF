@@ -24,7 +24,7 @@ static void uart_write(void* ctx, addr_t off, u32 val, u32 size) {
     if (off == 0x00) {
         if (u && u->replay_mode) return; /* suppress TX in replay */
         int c = (int)(val & 0xFF);
-        if (u && u->sink) u->sink(c);
+        if (u && u->sink) u->sink(u->sink_ctx, c);
         else { fputc(c, stdout); fflush(stdout); }
     }
 }

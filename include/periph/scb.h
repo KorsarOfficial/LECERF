@@ -23,6 +23,7 @@ typedef struct scb_s {
     u32 ccr;
     bool pendsv_pending;
     bool systick_pending_manual;
+    void* ctx;    /* per-board cpu_t*; preferred over g_cpu_for_scb */
 } scb_t;
 
 int scb_attach(bus_t* b, scb_t* s);

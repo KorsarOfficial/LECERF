@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
     systick_attach(&bus, &systick);
     static scb_t scb = {0};
     scb_attach(&bus, &scb);
-    extern cpu_t* g_cpu_for_scb;
+    extern cpu_t* g_cpu_for_scb; /* legacy global; will be deprecated in later refactor */
     g_cpu_for_scb = NULL; /* set after cpu_reset below */
     static mpu_t mpu = {0};
     mpu_attach(&bus, &mpu);

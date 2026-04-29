@@ -35,7 +35,8 @@ typedef struct region_s {
 
 struct bus_s {
     region_t regs[BUS_MAX_REGIONS];
-    u32 n;
+    u32   n;
+    void* cookie;  /* per-run context; set by board_run to &run_ctx_t, cleared after */
 };
 
 void bus_init(bus_t* b);
@@ -60,5 +61,10 @@ bool bus_load_blob(bus_t* b, addr_t a, const u8* data, u32 n);
 
 /* Find a REGION_FLAT region by exact base address; NULL if not found. */
 region_t* bus_find_flat(bus_t* b, addr_t base);
+
+/* Per-run cookie: set by board_run to run_ctx_t*; NULL after run completes.
+   Peripherals read this to access per-board state without globals. */
+static inline void  bus_set_cookie(bus_t* b, void* c) { b->cookie = c; }
+static inline void* bus_get_cookie(const bus_t* b)    { return b->cookie; }
 
 #endif
