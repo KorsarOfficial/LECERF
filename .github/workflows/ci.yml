@@ -24,9 +24,11 @@ jobs:
       - name: Build liblecerf.dll (MinGW)
         shell: msys2 {0}
         run: |
-          cmake -B build_ci -G "MinGW Makefiles" \
+          which gcc cmake ninja
+          cmake -B build_ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLECERF_BUILD_PYTHON=ON
+            -DLECERF_BUILD_PYTHON=ON \
+            -DCMAKE_C_COMPILER=gcc
           cmake --build build_ci --target liblecerf -j4
           ls build_ci/liblecerf.dll
 
