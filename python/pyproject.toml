@@ -16,3 +16,6 @@ include = ["lecerf*"]
 
 [tool.setuptools.package-data]
 lecerf = ["liblecerf.dll", "liblecerf.so", "liblecerf.dylib"]
+
+[project.entry-points.pytest11]
+lecerf = "lecerf.pytest_plugin"
