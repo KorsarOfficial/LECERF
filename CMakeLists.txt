@@ -55,5 +55,20 @@ if(WIN32)
     target_link_libraries(cortex_m_core PRIVATE ws2_32)
 endif()
 
+# liblecerf: thin C ABI shared library wrapping cortex_m_core
+add_library(liblecerf SHARED src/lecerf_api.c)
+set_target_properties(liblecerf PROPERTIES OUTPUT_NAME "liblecerf" PREFIX "")
+target_link_libraries(liblecerf PRIVATE cortex_m_core)
+if(WIN32)
+    target_link_libraries(liblecerf PRIVATE ws2_32)
+endif()
+
+# lecerf-smoke: two-board CPU and TT-event isolation demo
+add_executable(lecerf-smoke tools/smoke.c)
+target_link_libraries(lecerf-smoke PRIVATE cortex_m_core)
+if(WIN32)
+    target_link_libraries(lecerf-smoke PRIVATE ws2_32)
+endif()
+
 enable_testing()
 add_subdirectory(tests)
