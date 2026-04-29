@@ -5,6 +5,7 @@
 #include "core/bus.h"
 #include "core/decoder.h"
 #include "core/nvic.h"
+#include "core/run.h"
 #include "periph/systick.h"
 #include "periph/scb.h"
 #include "periph/dwt.h"
@@ -15,9 +16,9 @@
 static jit_t g_jit;
 static int g_jit_inited = 0;
 
-extern dwt_t* g_dwt_for_run;
-dwt_t* g_dwt_for_run = NULL;
-extern nvic_t* g_nvic_for_run;
+/* Process-globals used by legacy entry points only.
+   hot path: run_steps_full_gc reads ctx->dwt/nvic instead. */
+dwt_t*  g_dwt_for_run  = NULL;
 nvic_t* g_nvic_for_run = NULL;
 
 extern bool execute(cpu_t* c, bus_t* bus, const insn_t* i);
@@ -75,7 +76,72 @@ FORCE_INLINE u64 irq_safe_budget(const systick_t* st, const scb_t* scb, u64 rema
     return stk_cap < cap ? stk_cap : cap;
 }
 
-/* GDB-aware run (used by main.c and gdb integration). */
+/* =====================================================================
+   run_steps_full_gc: context-threaded run loop.
+   Reads dwt/nvic/tt/jit/replay from ctx; NO g_* reads in hot path.
+   ===================================================================== */
+u64 run_steps_full_gc(run_ctx_t* ctx, u64 max_steps) {
+    if (!ctx) return 0u;
+    cpu_t*     c    = ctx->cpu;
+    bus_t*     bus  = ctx->bus;
+    systick_t* st   = ctx->st;
+    scb_t*     scb  = ctx->scb;
+    dwt_t*     dwt  = ctx->dwt;
+    nvic_t*    nvic = ctx->nvic;
+    jit_t*     g    = ctx->jit;
+
+    dcache_invalidate();
+    u64 i = 0;
+    for (; i < max_steps && !c->halted; ++i) {
+        u64 jit_steps = 0;
+        u64 budget = irq_safe_budget(st, scb, max_steps - i);
+        const bool* stop = scb ? &scb->pendsv_pending : NULL;
+        if (g && jit_run_chained(g, c, bus, execute, budget, &jit_steps, stop)
+                && jit_steps > 0) {
+            if (st) systick_tick(st, (u32)jit_steps);
+            if (dwt && (dwt->ctrl & 1u) && (dwt->demcr & (1u << 24)))
+                dwt->cyccnt += (u32)jit_steps;
+            i += jit_steps - 1;
+            goto check_irqs_gc;
+        }
+        {
+            insn_t ins;
+            cache_decode(bus, c->r[REG_PC], &ins);
+            if (!execute(c, bus, &ins)) break;
+        }
+        if (st) systick_tick(st, 1);
+        if (dwt) dwt_tick(dwt);
+
+    check_irqs_gc:
+        if (c->mode == MODE_THREAD && !(c->primask & 1u) && c->basepri == 0) {
+            if (st && st->irq_pending) {
+                st->irq_pending = false;
+                exc_enter(c, bus, EXC_SYSTICK);
+                continue;
+            }
+            if (scb && scb->pendsv_pending) {
+                scb->pendsv_pending = false;
+                exc_enter(c, bus, EXC_PENDSV);
+                continue;
+            }
+            if (nvic) {
+                int irq = nvic_pick(nvic);
+                if (irq >= 0) {
+                    nvic_clear_pending(nvic, (u32)irq);
+                    nvic_set_active(nvic, (u32)irq);
+                    exc_enter(c, bus, (u8)(EXC_IRQ0 + irq));
+                    continue;
+                }
+            }
+        }
+    }
+    return i;
+}
+
+/* =====================================================================
+   GDB-aware run (used by main.c and gdb integration).
+   Legacy: still reads g_dwt_for_run / g_nvic_for_run (globals).
+   ===================================================================== */
 u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
                        systick_t* st, scb_t* scb, gdb_t* gdb) {
     dcache_invalidate();
@@ -90,17 +156,13 @@ u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
             gdb->halted_for_gdb = true;
             gdb_serve(gdb, c, bus);
         }
-        /* JIT fast path: chained dispatch across compiled blocks; falls back to
-           interpreter on miss or first few hits. Skip chain when gdb stepping
-           to preserve single-step semantics. Budget is capped to SysTick CVR so
-           the chain yields before the next tick boundary, preserving IRQ periodicity. */
         if (!gdb) {
             u64 jit_steps = 0;
             u64 budget = irq_safe_budget(st, scb, max_steps - i);
             const bool* stop = scb ? &scb->pendsv_pending : NULL;
             if (jit_run_chained(&g_jit, c, bus, execute, budget, &jit_steps, stop) && jit_steps > 0) {
                 if (st) systick_tick(st, (u32)jit_steps);
-                /* Batch DWT update: semantically equivalent to the per-step loop but O(1). */
+                /* legacy fallback: batch DWT update */
                 if (g_dwt_for_run && (g_dwt_for_run->ctrl & 1u) && (g_dwt_for_run->demcr & (1u << 24)))
                     g_dwt_for_run->cyccnt += (u32)jit_steps;
                 i += jit_steps - 1;
@@ -118,18 +180,15 @@ u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
                 goto check_irqs_gdb;
             }
         }
-        insn_t ins;
-        cache_decode(bus, c->r[REG_PC], &ins);
-        if (!execute(c, bus, &ins)) break;
-
+        {
+            insn_t ins;
+            cache_decode(bus, c->r[REG_PC], &ins);
+            if (!execute(c, bus, &ins)) break;
+        }
         if (st) systick_tick(st, 1);
         if (g_dwt_for_run) dwt_tick(g_dwt_for_run);
 
     check_irqs_gdb:
-        /* BASEPRI masks interrupts whose priority >= basepri (ARM spec).
-           When basepri != 0 (e.g., FreeRTOS critical section sets it to 16),
-           all kernel-priority interrupts (SysTick/PendSV at priority 255,
-           NVIC IRQs at priority >= basepri) are suppressed. */
         if (c->mode == MODE_THREAD && !(c->primask & 1u) && c->basepri == 0) {
             if (st && st->irq_pending) {
                 st->irq_pending = false;
@@ -155,53 +214,22 @@ u64 run_steps_full_gdb(cpu_t* c, bus_t* bus, u64 max_steps,
     return i;
 }
 
-/* Run with explicit jit_t (TT determinism path: caller owns jit state). */
+/* Run with explicit jit_t (TT determinism path: caller owns jit state).
+   Legacy wrapper: builds a transient run_ctx_t from globals. */
 u64 run_steps_full_g(cpu_t* c, bus_t* bus, u64 max_steps,
                      systick_t* st, scb_t* scb, jit_t* g) {
-    dcache_invalidate();
-    u64 i = 0;
-    for (; i < max_steps && !c->halted; ++i) {
-        u64 jit_steps = 0;
-        u64 budget = irq_safe_budget(st, scb, max_steps - i);
-        const bool* stop = scb ? &scb->pendsv_pending : NULL;
-        if (g && jit_run_chained(g, c, bus, execute, budget, &jit_steps, stop) && jit_steps > 0) {
-            if (st) systick_tick(st, (u32)jit_steps);
-            if (g_dwt_for_run && (g_dwt_for_run->ctrl & 1u) && (g_dwt_for_run->demcr & (1u << 24)))
-                g_dwt_for_run->cyccnt += (u32)jit_steps;
-            i += jit_steps - 1;
-            goto check_irqs;
-        }
-        insn_t ins;
-        cache_decode(bus, c->r[REG_PC], &ins);
-        if (!execute(c, bus, &ins)) break;
-
-        if (st) systick_tick(st, 1);
-        if (g_dwt_for_run) dwt_tick(g_dwt_for_run);
-
-    check_irqs:
-        if (c->mode == MODE_THREAD && !(c->primask & 1u) && c->basepri == 0) {
-            if (st && st->irq_pending) {
-                st->irq_pending = false;
-                exc_enter(c, bus, EXC_SYSTICK);
-                continue;
-            }
-            if (scb && scb->pendsv_pending) {
-                scb->pendsv_pending = false;
-                exc_enter(c, bus, EXC_PENDSV);
-                continue;
-            }
-            if (g_nvic_for_run) {
-                int irq = nvic_pick(g_nvic_for_run);
-                if (irq >= 0) {
-                    nvic_clear_pending(g_nvic_for_run, (u32)irq);
-                    nvic_set_active(g_nvic_for_run, (u32)irq);
-                    exc_enter(c, bus, (u8)(EXC_IRQ0 + irq));
-                    continue;
-                }
-            }
-        }
-    }
-    return i;
+    run_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.cpu    = c;
+    ctx.bus    = bus;
+    ctx.st     = st;
+    ctx.scb    = scb;
+    ctx.dwt    = g_dwt_for_run;  /* legacy fallback */
+    ctx.nvic   = g_nvic_for_run; /* legacy fallback */
+    ctx.jit    = g;
+    ctx.tt     = g_tt;           /* legacy fallback */
+    ctx.replay = g_replay_mode;  /* legacy fallback */
+    return run_steps_full_gc(&ctx, max_steps);
 }
 
 u64 run_steps_full(cpu_t* c, bus_t* bus, u64 max_steps,

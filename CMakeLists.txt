@@ -36,6 +36,7 @@ set(CORE_SRC
     src/core/jit.c
     src/core/codegen.c
     src/core/tt.c
+    src/core/board.c
     src/periph/uart.c
     src/periph/systick.c
     src/periph/scb.c
