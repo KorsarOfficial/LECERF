@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lecerf"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "Cortex-M firmware emulator for CI"
+license = { text = "MIT" }
+authors = [{ name = "KorsarOfficial" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lecerf*"]
+
+[tool.setuptools.package-data]
+lecerf = ["liblecerf.dll", "liblecerf.so", "liblecerf.dylib"]

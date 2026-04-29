@@ -13,3 +13,10 @@
 .vs/
 .vscode/
 compile_commands.json
+python/dist/
+python/build/
+python/*.egg-info/
+python/.pytest_cache/
+python/lecerf/liblecerf.*
+__pycache__/
+*.pyc

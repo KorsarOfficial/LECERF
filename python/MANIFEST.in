@@ -1,0 +1,4 @@
+include lecerf/*.py
+exclude .planning/*
+exclude firmware/*
+exclude tests/*

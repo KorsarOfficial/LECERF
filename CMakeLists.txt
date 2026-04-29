@@ -48,10 +48,15 @@ set(CORE_SRC
 
 add_library(cortex_m_core STATIC ${CORE_SRC})
 
-add_executable(cortex-m tools/main.c)
-target_link_libraries(cortex-m PRIVATE cortex_m_core)
+if(NOT LECERF_BUILD_PYTHON)
+    add_executable(cortex-m tools/main.c)
+    target_link_libraries(cortex-m PRIVATE cortex_m_core)
+    if(WIN32)
+        target_link_libraries(cortex-m PRIVATE ws2_32)
+    endif()
+endif()
+
 if(WIN32)
-    target_link_libraries(cortex-m PRIVATE ws2_32)
     target_link_libraries(cortex_m_core PRIVATE ws2_32)
 endif()
 
@@ -64,11 +69,21 @@ if(WIN32)
 endif()
 
 # lecerf-smoke: two-board CPU and TT-event isolation demo
-add_executable(lecerf-smoke tools/smoke.c)
-target_link_libraries(lecerf-smoke PRIVATE cortex_m_core)
-if(WIN32)
-    target_link_libraries(lecerf-smoke PRIVATE ws2_32)
+if(NOT LECERF_BUILD_PYTHON)
+    add_executable(lecerf-smoke tools/smoke.c)
+    target_link_libraries(lecerf-smoke PRIVATE cortex_m_core)
+    if(WIN32)
+        target_link_libraries(lecerf-smoke PRIVATE ws2_32)
+    endif()
 endif()
 
-enable_testing()
-add_subdirectory(tests)
+# Install liblecerf into lecerf/ package directory when building wheel
+install(TARGETS liblecerf
+    LIBRARY DESTINATION lecerf
+    RUNTIME DESTINATION lecerf
+)
+
+if(NOT LECERF_BUILD_PYTHON)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
